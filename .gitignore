@@ -8,3 +8,18 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Kotlin (caché del compilador)
+.kotlin/
+
+# Herramientas Python de tools/
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Binarios y firmas
+*.apk
+*.aab
+*.jks
+*.keystore

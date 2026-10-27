@@ -46,8 +46,6 @@ Abrir el proyecto en Android Studio, o:
 
 Requiere Android 15 o más (minSdk 35).
 
-En `tools/` hay herramientas de PC en Python: `dsp_client.py` se conecta al DSP real y `dsp_emulator.py` simula un DSP para probar la app. Se instalan con `pip install -r tools/requirements.txt`.
-
 ## Aviso
 
 Proyecto independiente, **sin relación con Expert Electronics**. El protocolo se obtuvo estudiando la app oficial. Usalo bajo tu responsabilidad: un mal ajuste de crossover o de ganancia puede dañar parlantes.

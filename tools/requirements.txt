@@ -1,5 +1,0 @@
-# Herramientas de PC para probar el protocolo BLE sin el celular.
-# dsp_client.py: cliente que se conecta al DSP real.
-bleak==3.0.2
-# dsp_emulator.py: DSP falso (servidor GATT) para probar la app.
-bless==0.3.0

@@ -4,14 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothGatt;
-import android.bluetooth.BluetoothGattCallback;
-import android.bluetooth.BluetoothGattCharacteristic;
-import android.bluetooth.BluetoothGattDescriptor;
-import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
-import android.bluetooth.BluetoothProfile;
-import android.bluetooth.BluetoothStatusCodes;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
@@ -42,36 +35,35 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import androidx.core.app.ActivityCompat;
 
+import ar.mtorchio.xlinkdsp.dsp.BleTransport;
+import ar.mtorchio.xlinkdsp.dsp.Command;
+import ar.mtorchio.xlinkdsp.dsp.Commands;
+import ar.mtorchio.xlinkdsp.dsp.Config;
+import ar.mtorchio.xlinkdsp.dsp.MockTransport;
+import ar.mtorchio.xlinkdsp.dsp.Session;
+import ar.mtorchio.xlinkdsp.dsp.Slope;
+import ar.mtorchio.xlinkdsp.dsp.Transport;
+
 import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Date;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 
 /**
- * XLink DSP (MVP): conecta por BLE al hardware DSP, manda la password, muestra
- * modelo/preset y permite pedir datos de solo lectura ("a;" = volcado de
- * configuración, "V;" = voltaje), mostrando la respuesta cruda.
- *
- * Replica el protocolo real de
- * br.com.expertelectronics.xair.BLEMainActivity + BluetoothLeService
- * (repo ExpertDSP): escaneo por nombre -> connectGatt -> discoverServices ->
- * notificaciones -> "AT+LESEND=0" -> envío de password "[0][pass]".
+ * XLink DSP: pantallas para manejar un DSP Expert Electronics. Busca el equipo
+ * por BLE (mismo filtro de nombres que xair BLEMainActivity) y le habla a través
+ * de una Session del package dsp, que tiene todo el protocolo.
  */
-public class MaxoXActivity extends Activity {
+public class XLinkActivity extends Activity {
 
-    static final String TAG = "MaxoXBLE";
-
-    static final UUID CHAR_WRITE = UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb");
-    static final UUID CHAR_NOTIFY = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb");
-    static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+    static final String TAG = "XLinkDsp";
 
     // Mismo filtro que xair BLEMainActivity (contains / prefijo de 2 letras / igual).
     private static final String[] DEVICE_NAME_CONTAINS = {
@@ -82,9 +74,6 @@ public class MaxoXActivity extends Activity {
     private static final String[] DEVICE_NAME_PREFIXES = {"M8", "mn", "W8"};
 
     private static final int REQUEST_PERMISSIONS = 1;
-    private static final long RESPONSE_TIMEOUT_MS = 8000;
-    // El DSP contesta "OK" a cada comando de escritura; si no llega, seguir igual tras esto.
-    static final long ACK_TIMEOUT_MS = 500;
     private static final long SCAN_TIMEOUT_MS = 8000;
 
     static final String PREFS = "xlink";
@@ -112,35 +101,32 @@ public class MaxoXActivity extends Activity {
     private static final int PAGE_CROSSOVER = 1;
     private static final int PAGE_EQ = 2;
     private static final int PAGE_GAIN = 3;
-    // Rangos de xair Limiter (modelos con valores enteros).
-    private static final int LIMIT_THRESHOLD_MIN = -54;
-    private static final int LIMIT_THRESHOLD_MAX = 6;
-    private static final int LIMIT_ATTACK_MIN = 1;
-    private static final int LIMIT_ATTACK_MAX = 200;
-    private static final int LIMIT_DECAY_MIN = 1;
-    private static final int LIMIT_DECAY_MAX = 990;
     private static final String PREF_XO_LINK = "xo_link";
     private static final String PREF_LIMITER_AUTO = "limiter_auto";
-    // Rangos de xair Gain (modelos con ganancia en dB enteros).
-    private static final int MAIN_GAIN_MIN = -53;
-    private static final int MAIN_GAIN_MAX = 0;
-    private static final int CHANNEL_GAIN_MIN = -33;
-    private static final int CHANNEL_GAIN_MAX = 9;
-    // xair Delay: distancia en mm (6500 en la serie PX "común"); 343 mm = 1 ms de sonido.
-    private static final int DELAY_MAX_MM = 6500;
+    // xair Delay: distancia en mm (rango en Commands); 343 mm = 1 ms de sonido.
     private static final int DELAY_STEP_MM = 10;
     private static final float MM_PER_MS = 343f;
     // xair Routing (modelos de 2 entradas) y Phase: {etiqueta, valor}.
     private static final String[] ROUTING_LABELS = {"L", "R", "L+R"};
-    private static final int[] ROUTING_VALUES = {2, 1, 0};
+    private static final int[] ROUTING_VALUES = {Commands.ROUTE_L, Commands.ROUTE_R, Commands.ROUTE_LR};
 
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private BluetoothAdapter bluetoothAdapter;
     private BluetoothLeScanner bluetoothLeScanner;
-    private BluetoothGatt bluetoothGatt;
-    private BluetoothGattCharacteristic writeCharacteristic;
-    private BluetoothGattCharacteristic notifyCharacteristic;
+    // Conexión abierta con el DSP (real o demo); null sin equipo.
+    private Session session;
+    private final Session.Scheduler scheduler = new Session.Scheduler() {
+        @Override
+        public void schedule(Runnable task, long delayMs) {
+            handler.postDelayed(task, delayMs);
+        }
+
+        @Override
+        public void cancel(Runnable task) {
+            handler.removeCallbacks(task);
+        }
+    };
     private SharedPreferences prefs;
 
     private State state = State.IDLE;
@@ -148,10 +134,7 @@ public class MaxoXActivity extends Activity {
     private final Map<String, BluetoothDevice> candidates = new LinkedHashMap<>();
     private final Map<String, View> candidateRows = new LinkedHashMap<>();
     private BluetoothDevice selectedDevice;
-    private boolean waitingForPasswordResponse = false;
-    private boolean passwordSent = false;
-    private final StringBuilder rxBuffer = new StringBuilder();
-    private String lastCommand;
+    private BluetoothDevice connectedDevice;
 
     private View statusDot;
     private TextView statusText;
@@ -183,38 +166,15 @@ public class MaxoXActivity extends Activity {
     private View eqFreqRow;
     private View eqQRow;
     private final List<TextView[]> eqBandRows = new ArrayList<>();
-    private DspConfig config;
+    private Config config;
     private int eqSelection;
     private int eqSelectedBand;
     // "Custom" por EQ (clave = eqSelection): lo grabado en el DSP más las ediciones a mano.
     private final Map<Integer, float[][]> eqCustom = new HashMap<>();
     // Preset activo por EQ: -1 = Custom.
     private final Map<Integer, Integer> eqActivePreset = new HashMap<>();
-    // Cola de escrituras del EQ: una operación GATT a la vez; la clave (tipo+canal+banda)
-    // pisa valores viejos que todavía no salieron.
-    private final Map<String, String> pendingWrites = new LinkedHashMap<>();
-    private boolean writeInFlight = false;
-    // Comando de la cola esperando el "OK" del DSP: el siguiente no sale hasta que llegue
-    // (o pase ACK_TIMEOUT_MS). Mandarlos de corrido hacía que el DSP descartara la mayoría.
-    private String awaitingAck;
-    private int missedAcks = 0;
-    private final Runnable ackTimeout = () -> {
-        String command;
-        synchronized (pendingWrites) {
-            command = awaitingAck;
-            awaitingAck = null;
-            if (command != null) {
-                missedAcks++;
-            }
-        }
-        if (command != null) {
-            log("Sin OK del DSP para " + command);
-            pumpEqWrites();
-        }
-    };
     // Live = cada cambio sale al DSP al instante; si no, se acumulan hasta Grabar.
     private boolean eqLive;
-    private boolean eqSaving = false;
     // Live / Grabar está en el encabezado de cada página editable (EQ y Ganancias).
     private final List<TextView> liveButtons = new ArrayList<>();
     private final List<TextView> saveButtons = new ArrayList<>();
@@ -223,9 +183,9 @@ public class MaxoXActivity extends Activity {
     private TextView gainEmpty;
     private LinearLayout gainRows;
     // Actividad con una conexión (real o demo) abierta, para que el widget la use.
-    private static WeakReference<MaxoXActivity> connectedActivity = new WeakReference<>(null);
+    private static WeakReference<XLinkActivity> connectedActivity = new WeakReference<>(null);
     private boolean permissionsAsked = false;
-    // Modo demo: "conectado" a un DSP simulado con respuestas de MockDsp (para el emulador).
+    // Modo demo: conectado a un DSP simulado (MockTransport), para el emulador.
     private boolean demoMode = false;
     private TextView demoButton;
     private TextView logView;
@@ -257,15 +217,7 @@ public class MaxoXActivity extends Activity {
     private LinearLayout xoLpfSlopes;
     private int xoSelected;
     private boolean xoLink;
-    // Cambios que esperan Grabar aunque Live esté prendido (crossover: un error rompe parlantes).
-    private final Map<String, String> heldWrites = new LinkedHashMap<>();
     private boolean limiterAuto;
-
-    private final Runnable timeoutRunnable = () -> {
-        if (waitingForPasswordResponse) {
-            fail("El DSP no contestó a la password");
-        }
-    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -774,7 +726,7 @@ public class MaxoXActivity extends Activity {
 
     // ---------------------------------------------------------------- Ecualizador
 
-    private void onConfigLoaded(DspConfig loaded) {
+    private void onConfigLoaded(Config loaded) {
         config = loaded;
         log("Config: bloques " + loaded.blocks.keySet() + ", EQ " + loaded.eqChannels.size()
                 + " canales, EQ de entrada " + loaded.inputEq.size() + " bandas");
@@ -886,7 +838,7 @@ public class MaxoXActivity extends Activity {
         return eqSelection < 0;
     }
 
-    private List<DspConfig.Band> currentBands() {
+    private List<Config.Band> currentBands() {
         return isInputEq() ? config.inputEq : config.eqChannels.get(eqSelection);
     }
 
@@ -899,7 +851,7 @@ public class MaxoXActivity extends Activity {
     private void selectEq(int selection) {
         eqSelection = selection;
         styleChips(eqChannelChips, selection);
-        List<DspConfig.Band> bands = currentBands();
+        List<Config.Band> bands = currentBands();
         if (!eqCustom.containsKey(selection)) {
             eqCustom.put(selection, snapshot(bands));
             if (selection < 0) {
@@ -924,7 +876,7 @@ public class MaxoXActivity extends Activity {
      * Si el widget dejó un preset en el EQ de entrada, lo que vino del DSP es ese
      * preset y no el Custom: el Custom real es el guardado en prefs.
      */
-    private void restoreInputCustom(List<DspConfig.Band> bands) {
+    private void restoreInputCustom(List<Config.Band> bands) {
         int widgetPreset = prefs.getInt(EqWidget.PREF_WIDGET_PRESET, -1);
         float[] saved = EqWidget.loadCustomIn(prefs);
         if (widgetPreset >= 0 && saved != null && saved.length == bands.size()) {
@@ -958,7 +910,7 @@ public class MaxoXActivity extends Activity {
     }
 
     private void refreshEditor() {
-        DspConfig.Band band = currentBands().get(eqSelectedBand);
+        Config.Band band = currentBands().get(eqSelectedBand);
         eqBandLabel.setText("F" + (eqSelectedBand + 1) + "  ·  " + formatHz(band.frequency));
         eqGainValue.setText(String.format(Locale.ROOT, "%+.0f dB", band.gainDb));
         eqGainValue.setTextColor(gainColor(band.gainDb));
@@ -992,7 +944,7 @@ public class MaxoXActivity extends Activity {
     }
 
     private void updateBandRow(int index) {
-        DspConfig.Band band = currentBands().get(index);
+        Config.Band band = currentBands().get(index);
         TextView[] views = eqBandRows.get(index);
         views[0].setText(formatHz(band.frequency));
         views[1].setText(String.format(Locale.ROOT, "Q %.1f", band.q));
@@ -1005,7 +957,7 @@ public class MaxoXActivity extends Activity {
     }
 
     private void stepGain(int direction) {
-        DspConfig.Band band = currentBands().get(eqSelectedBand);
+        Config.Band band = currentBands().get(eqSelectedBand);
         float gain = Math.max(-maxGain(), Math.min(maxGain(), band.gainDb + direction));
         if (gain != band.gainDb) {
             band.gainDb = gain;
@@ -1015,7 +967,7 @@ public class MaxoXActivity extends Activity {
 
     /** Pasos de 1/12 de octava, redondeados como el arrastre. */
     private void stepFrequency(int direction) {
-        DspConfig.Band band = currentBands().get(eqSelectedBand);
+        Config.Band band = currentBands().get(eqSelectedBand);
         float frequency = EqCurveView.roundHz(band.frequency * (float) Math.pow(2, direction / 12.0));
         if (frequency == band.frequency) {
             frequency = Math.max(20, Math.min(20000, band.frequency + direction));
@@ -1027,7 +979,7 @@ public class MaxoXActivity extends Activity {
     }
 
     private void stepQ(int direction) {
-        DspConfig.Band band = currentBands().get(eqSelectedBand);
+        Config.Band band = currentBands().get(eqSelectedBand);
         float q = Math.round(Math.max(0.6f, Math.min(9.9f, band.q + direction * 0.1f)) * 10) / 10f;
         if (q != band.q) {
             band.q = q;
@@ -1076,10 +1028,10 @@ public class MaxoXActivity extends Activity {
         if (config == null) {
             return;
         }
-        List<DspConfig.Band> bands = currentBands();
+        List<Config.Band> bands = currentBands();
         float[][] custom = eqCustom.get(eqSelection);
         for (int i = 0; i < bands.size(); i++) {
-            DspConfig.Band band = bands.get(i);
+            Config.Band band = bands.get(i);
             float oldFrequency = band.frequency;
             float oldQ = band.q;
             if (preset < 0) {
@@ -1110,10 +1062,10 @@ public class MaxoXActivity extends Activity {
                 + (preset < 0 ? "Custom" : EqPresets.NAMES[preset]));
     }
 
-    private static float[][] snapshot(List<DspConfig.Band> bands) {
+    private static float[][] snapshot(List<Config.Band> bands) {
         float[][] copy = new float[bands.size()][];
         for (int i = 0; i < bands.size(); i++) {
-            DspConfig.Band band = bands.get(i);
+            Config.Band band = bands.get(i);
             copy[i] = new float[]{band.frequency, band.q, band.gainDb};
         }
         return copy;
@@ -1171,7 +1123,7 @@ public class MaxoXActivity extends Activity {
                 routing.addView(chip(ROUTING_LABELS[i], value, v -> {
                     config.routing[channel] = value;
                     styleChips(routing, value);
-                    queueWrite("ROUTE" + channel, "[3][" + channel + "][" + value + "]");
+                    queueWrite(Commands.routing(channel, value));
                 }));
             }
             styleChips(routing, config.routing[channel]);
@@ -1186,7 +1138,7 @@ public class MaxoXActivity extends Activity {
                 phase.addView(chip(labels[value], value, v -> {
                     config.phase[channel] = phaseValue;
                     styleChips(phase, phaseValue);
-                    queueWrite("PHASE" + channel, "[6][" + channel + "][" + phaseValue + "]");
+                    queueWrite(Commands.phase(channel, phaseValue == 1));
                 }));
             }
             styleChips(phase, config.phase[channel]);
@@ -1200,8 +1152,8 @@ public class MaxoXActivity extends Activity {
             TextView minus = button("−", CYAN, false);
             delayRow.addView(minus, new LinearLayout.LayoutParams(dp(40), dp(32)));
             SeekBar seekBar = new SeekBar(this);
-            seekBar.setMax(DELAY_MAX_MM);
-            seekBar.setProgress(Math.min(DELAY_MAX_MM, Math.max(0, config.delays[channel])));
+            seekBar.setMax(Commands.DELAY_MAX_MM);
+            seekBar.setProgress(Math.min(Commands.DELAY_MAX_MM, Math.max(0, config.delays[channel])));
             seekBar.setProgressTintList(ColorStateList.valueOf(VIOLET));
             seekBar.setThumbTintList(ColorStateList.valueOf(VIOLET));
             seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(CARD_STROKE));
@@ -1211,7 +1163,7 @@ public class MaxoXActivity extends Activity {
             delayValue.setText(formatDelay(seekBar.getProgress()));
             Runnable send = () -> {
                 config.delays[channel] = seekBar.getProgress();
-                queueWrite("DELAY" + channel, "[7][" + channel + "][" + seekBar.getProgress() + "]");
+                queueWrite(Commands.delay(channel, seekBar.getProgress()));
             };
             seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override
@@ -1234,7 +1186,7 @@ public class MaxoXActivity extends Activity {
                 send.run();
             });
             plus.setOnClickListener(v -> {
-                seekBar.setProgress(Math.min(DELAY_MAX_MM, seekBar.getProgress() + DELAY_STEP_MM));
+                seekBar.setProgress(Math.min(Commands.DELAY_MAX_MM, seekBar.getProgress() + DELAY_STEP_MM));
                 send.run();
             });
             LinearLayout.LayoutParams delayParams = new LinearLayout.LayoutParams(
@@ -1264,9 +1216,8 @@ public class MaxoXActivity extends Activity {
         section.addView(stepperRow("Frecuencia", value, v -> stepXoFrequency(hpf, -1), v -> stepXoFrequency(hpf, 1)));
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
-        for (int i = 0; i < CrossoverView.SLOPES.length; i++) {
-            int index = i;
-            slopes.addView(chip(CrossoverView.SLOPE_LABELS[i], i, v -> setXoSlope(hpf, index)));
+        for (Slope slope : Slope.values()) {
+            slopes.addView(chip(slope.label, slope.ordinal(), v -> setXoSlope(hpf, slope)));
         }
         scroll.addView(slopes);
         LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
@@ -1331,21 +1282,9 @@ public class MaxoXActivity extends Activity {
         xoView.invalidate();
     }
 
-    private static int slopeIndex(String slope) {
-        for (int i = 0; i < CrossoverView.SLOPES.length; i++) {
-            if (CrossoverView.SLOPES[i].equals(slope)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * Comandos de xair Crossover (canal 0-based): [2][ch][0][Hz] HPF, [2][ch][1][pendiente],
-     * [2][ch][2][Hz] LPF, [2][ch][3][pendiente]. Siempre esperan a Grabar.
-     */
-    private void queueXo(int channel, int param, String value) {
-        queueWrite("XO" + channel + ":" + param, "[2][" + channel + "][" + param + "][" + value + "]", false);
+    private static int slopeIndex(String code) {
+        Slope slope = Slope.fromCode(code);
+        return slope != null ? slope.ordinal() : -1;
     }
 
     private void setXoFrequency(boolean hpf, int hz, boolean send) {
@@ -1354,8 +1293,9 @@ public class MaxoXActivity extends Activity {
                 continue;
             }
             (hpf ? config.hpfFreq : config.lpfFreq)[ch] = hz;
+            // El crossover siempre espera a Grabar.
             if (send) {
-                queueXo(ch, hpf ? 0 : 2, String.valueOf(hz));
+                queueWrite(hpf ? Commands.hpfFrequency(ch, hz) : Commands.lpfFrequency(ch, hz), false);
             }
         }
         refreshXo();
@@ -1383,9 +1323,8 @@ public class MaxoXActivity extends Activity {
         }
     }
 
-    private void setXoSlope(boolean hpf, int index) {
-        String slope = CrossoverView.SLOPES[index];
-        if (slope.equals((hpf ? config.hpfSlope : config.lpfSlope)[xoSelected])) {
+    private void setXoSlope(boolean hpf, Slope slope) {
+        if (slope.code.equals((hpf ? config.hpfSlope : config.lpfSlope)[xoSelected])) {
             return;
         }
         Runnable apply = () -> {
@@ -1393,12 +1332,12 @@ public class MaxoXActivity extends Activity {
                 if (ch < 0) {
                     continue;
                 }
-                (hpf ? config.hpfSlope : config.lpfSlope)[ch] = slope;
-                queueXo(ch, hpf ? 1 : 3, slope);
+                (hpf ? config.hpfSlope : config.lpfSlope)[ch] = slope.code;
+                queueWrite(hpf ? Commands.hpfSlope(ch, slope) : Commands.lpfSlope(ch, slope), false);
             }
             refreshXo();
         };
-        if (hpf && "OFF".equals(slope)) {
+        if (hpf && slope == Slope.OFF) {
             new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                     .setTitle("¿Sacar el corte de graves?")
                     .setMessage("Sin HPF, un tweeter o un medio recibe graves y se puede romper. "
@@ -1417,7 +1356,7 @@ public class MaxoXActivity extends Activity {
         gainRows.removeAllViews();
         if (!Float.isNaN(config.mainGain)) {
             gainRows.addView(label("MASTER"));
-            gainRows.addView(gainRow("Master", -1, config.mainGain, MAIN_GAIN_MIN, MAIN_GAIN_MAX));
+            gainRows.addView(gainRow("Master", -1, config.mainGain, Commands.MAIN_GAIN_MIN, Commands.MAIN_GAIN_MAX));
             LinearLayout channelsHeader = new LinearLayout(this);
             channelsHeader.setGravity(Gravity.CENTER_VERTICAL);
             channelsHeader.setPadding(0, dp(18), 0, 0);
@@ -1437,11 +1376,11 @@ public class MaxoXActivity extends Activity {
             gainRows.addView(channelsHeader);
         }
         for (int ch = 0; ch < config.channelGains.length; ch++) {
-            gainRows.addView(gainRow("CH" + (ch + 1), ch, config.channelGains[ch], CHANNEL_GAIN_MIN, CHANNEL_GAIN_MAX));
+            gainRows.addView(gainRow("CH" + (ch + 1), ch, config.channelGains[ch], Commands.CHANNEL_GAIN_MIN, Commands.CHANNEL_GAIN_MAX));
         }
     }
 
-    /** channel = -1 para el master. Comandos de xair Gain: [100][ch][dB] y [999][ch][1|0] (mute). */
+    /** channel = -1 para el master. */
     private View gainRow(String name, int channel, float gain, int min, int max) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
@@ -1458,7 +1397,7 @@ public class MaxoXActivity extends Activity {
             mute.setOnClickListener(v -> {
                 config.channelMutes[channel] = !config.channelMutes[channel];
                 styleMute(mute, value, channel);
-                queueWrite("MUTE" + channel, "[999][" + channel + "][" + (config.channelMutes[channel] ? 1 : 0) + "]");
+                queueWrite(Commands.mute(channel, config.channelMutes[channel]));
             });
             LinearLayout.LayoutParams muteParams = (LinearLayout.LayoutParams) mute.getLayoutParams();
             muteParams.rightMargin = dp(12);
@@ -1495,7 +1434,7 @@ public class MaxoXActivity extends Activity {
                 } else {
                     config.channelGains[channel] = progress;
                 }
-                queueWrite("GAIN" + channel, "[100][" + channel + "][" + progress + "]");
+                queueWrite(channel < 0 ? Commands.masterGain(progress) : Commands.channelGain(channel, progress));
             }
         });
         LinearLayout.LayoutParams seekParams = new LinearLayout.LayoutParams(
@@ -1508,33 +1447,30 @@ public class MaxoXActivity extends Activity {
         return row;
     }
 
-    /**
-     * Limiter del canal (xair Limiter): umbral [103] (o [113] en modo auto, donde el DSP
-     * calcula attack y decay a partir del HPF), attack [102] y decay [104].
-     */
+    /** Limiter del canal: umbral, y attack y decay solo en manual (en auto los calcula el DSP). */
     private void addLimiterRows(LinearLayout row, int channel) {
         if (channel < config.limThreshold.length) {
-            row.addView(miniSlider("Limiter", LIMIT_THRESHOLD_MIN, LIMIT_THRESHOLD_MAX,
+            row.addView(miniSlider("Limiter", Commands.LIMIT_THRESHOLD_MIN, Commands.LIMIT_THRESHOLD_MAX,
                     config.limThreshold[channel], "%+d dB", PINK, value -> {
                         config.limThreshold[channel] = value;
-                        queueWrite("LIMT" + channel, "[" + (limiterAuto ? 113 : 103) + "][" + channel + "][" + value + "]");
+                        queueWrite(Commands.limiterThreshold(channel, value, limiterAuto));
                     }));
         }
         if (limiterAuto) {
             return;
         }
         if (channel < config.limAttack.length) {
-            row.addView(miniSlider("Attack", LIMIT_ATTACK_MIN, LIMIT_ATTACK_MAX,
+            row.addView(miniSlider("Attack", Commands.LIMIT_ATTACK_MIN, Commands.LIMIT_ATTACK_MAX,
                     config.limAttack[channel], "%d ms", VIOLET, value -> {
                         config.limAttack[channel] = value;
-                        queueWrite("LIMA" + channel, "[102][" + channel + "][" + value + "]");
+                        queueWrite(Commands.limiterAttack(channel, value));
                     }));
         }
         if (channel < config.limDecay.length) {
-            row.addView(miniSlider("Decay", LIMIT_DECAY_MIN, LIMIT_DECAY_MAX,
+            row.addView(miniSlider("Decay", Commands.LIMIT_DECAY_MIN, Commands.LIMIT_DECAY_MAX,
                     config.limDecay[channel], "%d ms", VIOLET, value -> {
                         config.limDecay[channel] = value;
-                        queueWrite("LIMD" + channel, "[104][" + channel + "][" + value + "]");
+                        queueWrite(Commands.limiterDecay(channel, value));
                     }));
         }
     }
@@ -1585,42 +1521,35 @@ public class MaxoXActivity extends Activity {
 
     // ---------------------------------------------------------------- Escritura del EQ
 
-    /**
-     * Comandos de xair (EQCH / EQIN), canal 0-based:
-     * [202][ch][Fn][dB] ganancia, [203][ch][Fn][Hz] frecuencia, [201][ch][Fn][Q] factor Q
-     * (bandas desde F1). El EQ de entrada usa canal -1 y bandas desde F0.
-     */
+    /** type: "G" ganancia, "F" frecuencia, "Q" factor Q (el EQ de entrada solo tiene ganancia). */
     private void queueEqWrite(String type, int bandIndex) {
-        DspConfig.Band band = currentBands().get(bandIndex);
-        String command;
+        Config.Band band = currentBands().get(bandIndex);
         if (isInputEq()) {
-            command = "[202][-1][F" + bandIndex + "][" + Math.round(band.gainDb) + "]";
+            queueWrite(Commands.inputEqGain(bandIndex, band.gainDb));
+        } else if (type.equals("F")) {
+            queueWrite(Commands.eqChannelFrequency(eqSelection, bandIndex, band.frequency));
+        } else if (type.equals("Q")) {
+            queueWrite(Commands.eqChannelQ(eqSelection, bandIndex, band.q));
         } else {
-            String target = "[" + eqSelection + "][F" + (bandIndex + 1) + "]";
-            switch (type) {
-                case "F":
-                    command = "[203]" + target + "[" + Math.round(band.frequency) + "]";
-                    break;
-                case "Q":
-                    command = "[201]" + target + "[" + String.format(Locale.ROOT, "%.1f", band.q) + "]";
-                    break;
-                default:
-                    command = "[202]" + target + "[" + Math.round(band.gainDb) + "]";
-            }
+            queueWrite(Commands.eqChannelGain(eqSelection, bandIndex, band.gainDb));
         }
-        queueWrite(type + eqSelection + ":" + bandIndex, command);
     }
 
     /** Encola un comando (la clave pisa uno pendiente igual); con Live sale ya. */
-    private void queueWrite(String key, String command) {
-        queueWrite(key, command, true);
+    private void queueWrite(Command command) {
+        queueWrite(command, true);
     }
 
     /** allowLive = false: aunque Live esté prendido, el cambio espera a Grabar (crossover). */
-    private void queueWrite(String key, String command, boolean allowLive) {
+    private void queueWrite(Command command, boolean allowLive) {
+        if (session == null) {
+            return;
+        }
         boolean held = eqLive && !allowLive;
-        synchronized (pendingWrites) {
-            (held ? heldWrites : pendingWrites).put(key, command);
+        if (held) {
+            session.hold(command);
+        } else {
+            session.queue(command);
         }
         if (eqLive && allowLive) {
             flushEq();
@@ -1632,9 +1561,8 @@ public class MaxoXActivity extends Activity {
 
     /** Botón Grabar: manda lo pendiente, incluido lo retenido del crossover. */
     private void saveAll() {
-        synchronized (pendingWrites) {
-            pendingWrites.putAll(heldWrites);
-            heldWrites.clear();
+        if (session != null) {
+            session.releaseHeld();
         }
         flushEq();
     }
@@ -1682,12 +1610,9 @@ public class MaxoXActivity extends Activity {
     }
 
     private void updateEqHeader() {
-        int count;
-        int held;
-        synchronized (pendingWrites) {
-            count = pendingWrites.size() + heldWrites.size();
-            held = heldWrites.size();
-        }
+        int held = session != null ? session.heldCount() : 0;
+        int count = session != null ? session.pendingCount() + held : 0;
+        boolean saving = session != null && session.isSending();
         boolean show = config != null && state == State.CONNECTED;
         for (TextView live : liveButtons) {
             live.setVisibility(show ? View.VISIBLE : View.GONE);
@@ -1698,70 +1623,19 @@ public class MaxoXActivity extends Activity {
         // Con Live el botón Grabar sobra: todo sale al instante.
         for (TextView save : saveButtons) {
             save.setVisibility(show && (!eqLive || held > 0) ? View.VISIBLE : View.GONE);
-            save.setText(eqSaving ? "Grabando…" : count > 0 ? "Grabar (" + count + ")" : "Grabar");
-            save.setEnabled(count > 0 && !eqSaving);
-            save.setAlpha(count > 0 || eqSaving ? 1f : 0.4f);
+            save.setText(saving ? "Grabando…" : count > 0 ? "Grabar (" + count + ")" : "Grabar");
+            save.setEnabled(count > 0 && !saving);
+            save.setAlpha(count > 0 || saving ? 1f : 0.4f);
         }
     }
 
     /** Manda al DSP todos los cambios pendientes (Grabar, o cada cambio con Live). */
     private void flushEq() {
-        if (demoMode) {
-            List<String> commands;
-            synchronized (pendingWrites) {
-                commands = new ArrayList<>(pendingWrites.values());
-                pendingWrites.clear();
-            }
-            for (String command : commands) {
-                log("TX (demo) -> " + command);
-            }
-            updateEqHeader();
-            setSync(eqLive ? "✓ Aplicado (demo)" : "✓ Grabado (demo)", VIOLET);
+        if (session == null || session.pendingCount() == 0) {
             return;
         }
-        synchronized (pendingWrites) {
-            if (pendingWrites.isEmpty()) {
-                return;
-            }
-            eqSaving = true;
-        }
+        session.flush();
         updateEqHeader();
-        pumpEqWrites();
-    }
-
-    private void pumpEqWrites() {
-        String command;
-        int left;
-        synchronized (pendingWrites) {
-            if (!eqSaving || writeInFlight || awaitingAck != null || bluetoothGatt == null
-                    || state != State.CONNECTED) {
-                return;
-            }
-            if (pendingWrites.isEmpty()) {
-                eqSaving = false;
-                int missed = missedAcks;
-                missedAcks = 0;
-                runOnUiThread(() -> {
-                    updateEqHeader();
-                    if (missed == 0) {
-                        setSync("✓ Grabado en el DSP", GREEN);
-                    } else {
-                        setSync("⚠ " + missed + " sin confirmar (ver log)", ORANGE);
-                    }
-                });
-                return;
-            }
-            String key = pendingWrites.keySet().iterator().next();
-            command = pendingWrites.remove(key);
-            left = pendingWrites.size();
-            awaitingAck = command;
-        }
-        handler.postDelayed(ackTimeout, ACK_TIMEOUT_MS);
-        sendCommand(bluetoothGatt, command + "\r\n");
-        runOnUiThread(() -> {
-            updateEqHeader();
-            setSync("Enviando…" + (left > 0 ? " (" + left + ")" : ""), MUTED);
-        });
     }
 
     private static String formatHz(float hz) {
@@ -1852,7 +1726,7 @@ public class MaxoXActivity extends Activity {
     private void disconnect(String reason) {
         log(reason);
         demoMode = false;
-        closeGatt();
+        closeSession();
         config = null;
         setStatus(MUTED, "Desconectado", "Elegí tu DSP para conectar");
         setState(State.IDLE);
@@ -1886,7 +1760,7 @@ public class MaxoXActivity extends Activity {
      * (sin importar Live). false si no hay conexión con la config cargada.
      */
     static boolean applyInputPresetFromWidget(int preset) {
-        MaxoXActivity activity = connectedActivity.get();
+        XLinkActivity activity = connectedActivity.get();
         if (activity == null || activity.config == null || activity.config.inputEq.isEmpty()) {
             return false;
         }
@@ -2044,7 +1918,7 @@ public class MaxoXActivity extends Activity {
     }
 
     private void search() {
-        closeGatt();
+        closeSession();
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled()) {
             fail("Activá el Bluetooth del celular");
             return;
@@ -2079,42 +1953,18 @@ public class MaxoXActivity extends Activity {
         log("Tocaste Conectar");
         prefs.edit().putString(PREF_PASSWORD, password).apply();
         stopScan();
-        closeGatt();
-        connectToDevice(selectedDevice);
-    }
-
-    private void sendUserCommand(String command, String title) {
-        if (state != State.CONNECTED || (bluetoothGatt == null && !demoMode)) {
-            return;
-        }
-        lastCommand = title;
-        synchronized (rxBuffer) {
-            rxBuffer.setLength(0);
-        }
-        if (demoMode) {
-            log("TX (demo) -> " + command);
-            String response = MockDsp.respond(command);
-            if (response != null) {
-                // Pequeña demora para que se vea el "esperando…" como con el equipo real.
-                handler.postDelayed(() -> onDataReceived(response), 400);
-            }
-            return;
-        }
-        sendCommand(bluetoothGatt, command + "\r\n");
+        demoMode = false;
+        connectToDevice(selectedDevice, password);
     }
 
     private void startDemo() {
         log("Modo demo: DSP simulado con datos capturados de un PX 201");
         stopScan();
-        closeGatt();
         demoMode = true;
-        setStatus(VIOLET, "Conectado a " + MockDsp.DEVICE_NAME,
-                "Modelo " + MockDsp.MODEL + "  ·  Preset " + MockDsp.PRESET + "  ·  datos simulados");
-        setConnectedInfo(MockDsp.DEVICE_NAME, "Modelo " + MockDsp.MODEL + " · Preset " + MockDsp.PRESET,
-                "Datos simulados de un PX 201", VIOLET);
-        config = null;
-        setState(State.CONNECTED);
-        sendUserCommand("a;", "Configuración");
+        connectedDevice = null;
+        setStatus(VIOLET, "Conectando…", MockTransport.DEVICE_NAME);
+        setState(State.CONNECTING);
+        startSession(new MockTransport(scheduler), "demo");
     }
 
     @Override
@@ -2237,242 +2087,95 @@ public class MaxoXActivity extends Activity {
         }
     };
 
-    // ---------------------------------------------------------------- GATT
+    // ---------------------------------------------------------------- Sesión con el DSP
 
-    private void connectToDevice(BluetoothDevice device) {
-        log("Conectando (GATT) a " + device.getAddress() + "…");
+    private void connectToDevice(BluetoothDevice device, String password) {
+        connectedDevice = device;
         setStatus(CYAN, "Conectando…", device.getAddress());
         setState(State.CONNECTING);
-        bluetoothGatt = device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE);
+        startSession(new BleTransport(this, device.getAddress()), password);
     }
 
-    private void closeGatt() {
-        handler.removeCallbacks(timeoutRunnable);
-        waitingForPasswordResponse = false;
-        if (bluetoothGatt != null) {
-            bluetoothGatt.disconnect();
-            bluetoothGatt.close();
-            bluetoothGatt = null;
-        }
-        writeCharacteristic = null;
-        notifyCharacteristic = null;
-        synchronized (pendingWrites) {
-            pendingWrites.clear();
-            heldWrites.clear();
-            writeInFlight = false;
-            eqSaving = false;
-            awaitingAck = null;
-            missedAcks = 0;
-        }
-        handler.removeCallbacks(ackTimeout);
-        synchronized (pendingWrites) {
+    private void startSession(Transport transport, String password) {
+        closeSession();
+        session = new Session(transport, password, scheduler, sessionListener);
+        session.connect();
+    }
+
+    private void closeSession() {
+        if (session != null) {
+            session.close();
+            session = null;
         }
     }
 
-    private final BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
+    // Todos los callbacks llegan en el hilo principal.
+    private final Session.Listener sessionListener = new Session.Listener() {
         @Override
-        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                log("GATT conectado, descubriendo servicios…");
-                gatt.discoverServices();
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                log("Desconectado (status " + status + ")");
-                if (gatt != bluetoothGatt) {
-                    return;
-                }
-                closeGatt();
-                if (state == State.CONNECTING) {
-                    fail("El DSP cortó la conexión antes de autenticar");
-                } else if (state == State.CONNECTED) {
-                    setStatus(ORANGE, "Se perdió la conexión", "Buscando de nuevo…");
-                    setState(State.IDLE);
-                    handler.post(MaxoXActivity.this::autoSearch);
-                }
+        public void onReady(String model, String preset) {
+            onAuthenticated(model, preset);
+        }
+
+        @Override
+        public void onConfig(Config loaded) {
+            onConfigLoaded(loaded);
+        }
+
+        @Override
+        public void onClosed(String reason, boolean wasReady) {
+            session = null;
+            if (wasReady) {
+                log("Desconectado: " + reason);
+                setStatus(ORANGE, "Se perdió la conexión", "Buscando de nuevo…");
+                setState(State.IDLE);
+                handler.post(XLinkActivity.this::autoSearch);
+            } else {
+                fail(reason);
             }
         }
 
         @Override
-        public void onServicesDiscovered(BluetoothGatt gatt, int status) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                fail("Falla al descubrir servicios (" + status + ")");
-                return;
-            }
-            log("Servicios descubiertos (" + gatt.getServices().size() + "), buscando características fff1/fff2…");
-            if (!findCharacteristics(gatt.getServices())) {
-                fail("El equipo no tiene las características BLE esperadas (fff1/fff2)");
-                return;
-            }
-            log("Características encontradas, activando notificaciones…");
-            // Android admite una sola operación GATT pendiente: cada paso sigue
-            // en el callback del anterior (CCCD -> AT+LESEND -> password).
-            if (!enableNotifications(gatt, notifyCharacteristic)) {
-                sendCleanLE(gatt);
+        public void onSending(int left) {
+            updateEqHeader();
+            setSync("Enviando…" + (left > 0 ? " (" + left + ")" : ""), MUTED);
+        }
+
+        @Override
+        public void onFlushed(int missedAcks) {
+            updateEqHeader();
+            if (missedAcks > 0) {
+                setSync("⚠ " + missedAcks + " sin confirmar (ver log)", ORANGE);
+            } else if (demoMode) {
+                setSync(eqLive ? "✓ Aplicado (demo)" : "✓ Grabado (demo)", VIOLET);
+            } else {
+                setSync("✓ Grabado en el DSP", GREEN);
             }
         }
 
         @Override
-        public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
-            if (CCCD.equals(descriptor.getUuid())) {
-                log("Notificaciones activadas (status " + status + ")");
-                sendCleanLE(gatt);
-            }
-        }
-
-        @Override
-        public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
-            if (!CHAR_WRITE.equals(characteristic.getUuid())) {
-                return;
-            }
-            synchronized (pendingWrites) {
-                writeInFlight = false;
-            }
-            if (passwordSent) {
-                pumpEqWrites();
-                return;
-            }
-            log("Enviando password…");
-            String password = passwordField.getText().toString().trim();
-            passwordSent = true;
-            waitingForPasswordResponse = true;
-            handler.postDelayed(timeoutRunnable, RESPONSE_TIMEOUT_MS);
-            sendCommand(gatt, "[0][" + password + "]\r\n");
-        }
-
-        @Override
-        public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, byte[] value) {
-            String chunk = new String(value);
-            Log.d(TAG, "RX: " + chunk);
-            String received;
-            synchronized (rxBuffer) {
-                rxBuffer.append(chunk);
-                received = rxBuffer.toString();
-            }
-            if (waitingForPasswordResponse) {
-                if (received.contains("[77][1]")) {
-                    String model = extractField(received, 3);
-                    String preset = extractField(received, 4);
-                    onAuthenticated(gatt, model, preset);
-                } else if (received.contains("[24]") || received.contains("ER")) {
-                    fail("Password inválida");
-                    closeGatt();
-                }
-                return;
-            }
-            if (state == State.CONNECTED) {
-                if (chunk.contains("OK")) {
-                    boolean acked;
-                    synchronized (pendingWrites) {
-                        acked = awaitingAck != null;
-                        awaitingAck = null;
-                    }
-                    if (acked) {
-                        handler.removeCallbacks(ackTimeout);
-                        pumpEqWrites();
-                    }
-                }
-                showReceived(received);
-            }
+        public void onLog(String message) {
+            log(message);
         }
     };
 
-    /** Respuesta del modo demo: entra igual que una notificación del DSP. */
-    private void onDataReceived(String response) {
-        if (!demoMode || state != State.CONNECTED) {
-            return;
-        }
-        String received;
-        synchronized (rxBuffer) {
-            rxBuffer.append(response);
-            received = rxBuffer.toString();
-        }
-        showReceived(received);
-    }
-
-    private void showReceived(String received) {
-        if ("Configuración".equals(lastCommand) && DspConfig.isComplete(received)) {
-            onConfigLoaded(DspConfig.parse(received));
-        }
-    }
-
-    private void onAuthenticated(BluetoothGatt gatt, String model, String preset) {
-        handler.removeCallbacks(timeoutRunnable);
-        waitingForPasswordResponse = false;
-        synchronized (rxBuffer) {
-            rxBuffer.setLength(0);
-        }
-        BluetoothDevice device = gatt.getDevice();
-        prefs.edit().putString(PREF_LAST_ADDRESS, device.getAddress()).apply();
+    private void onAuthenticated(String model, String preset) {
         log("OK: autenticado — modelo " + model + ", preset " + preset);
-        String name = device.getName() != null ? device.getName() : device.getAddress();
-        setStatus(GREEN, "Conectado a " + name, "Modelo " + model + "  ·  Preset " + preset + "  ·  " + device.getAddress());
-        setConnectedInfo(name, "Modelo " + model + " · Preset " + preset,
-                "Modelo " + model + "  ·  Preset " + preset + "\n" + device.getAddress(), GREEN);
-        setState(State.CONNECTED);
-        config = null;
-        renderState();
-        // Traer la configuración de una (solo lectura). Pequeña espera para que
-        // termine la escritura de la password, que puede seguir pendiente en el stack GATT.
-        handler.postDelayed(() -> sendUserCommand("a;", "Configuración"), 300);
-    }
-
-    private String extractField(String response, int bracketIndex) {
-        try {
-            String[] byOpenBracket = response.split("\\[");
-            String afterBracket = byOpenBracket[bracketIndex];
-            return afterBracket.split("\\]")[0];
-        } catch (Exception e) {
-            return "?";
-        }
-    }
-
-    private boolean findCharacteristics(List<BluetoothGattService> services) {
-        for (BluetoothGattService service : services) {
-            BluetoothGattCharacteristic write = service.getCharacteristic(CHAR_WRITE);
-            BluetoothGattCharacteristic notify = service.getCharacteristic(CHAR_NOTIFY);
-            if (write != null && notify != null) {
-                writeCharacteristic = write;
-                notifyCharacteristic = notify;
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** Devuelve true si quedó una escritura del CCCD pendiente (sigue en onDescriptorWrite). */
-    private boolean enableNotifications(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
-        gatt.setCharacteristicNotification(characteristic, true);
-        BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD);
-        if (descriptor == null) {
-            return false;
-        }
-        return gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                == BluetoothStatusCodes.SUCCESS;
-    }
-
-    // Equivalente a BluetoothLeService.cleanLE() en xair; la password sale en onCharacteristicWrite.
-    private void sendCleanLE(BluetoothGatt gatt) {
-        passwordSent = false;
-        synchronized (rxBuffer) {
-            rxBuffer.setLength(0);
-        }
-        sendCommand(gatt, "AT+LESEND=0\r\n");
-    }
-
-    private void sendCommand(BluetoothGatt gatt, String command) {
-        if (writeCharacteristic == null) {
-            return;
-        }
-        // No dejar la password a la vista en el log técnico.
-        log("TX -> " + command.trim().replaceAll("^\\[0\\]\\[.*\\]$", "[0][****]"));
-        int result = gatt.writeCharacteristic(writeCharacteristic, command.getBytes(),
-                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
-        if (result == BluetoothStatusCodes.SUCCESS) {
-            synchronized (pendingWrites) {
-                writeInFlight = true;
-            }
+        if (demoMode) {
+            setStatus(VIOLET, "Conectado a " + MockTransport.DEVICE_NAME,
+                    "Modelo " + model + "  ·  Preset " + preset + "  ·  datos simulados");
+            setConnectedInfo(MockTransport.DEVICE_NAME, "Modelo " + model + " · Preset " + preset,
+                    "Datos simulados de un PX 201", VIOLET);
         } else {
-            log("ERROR: writeCharacteristic rechazado (" + result + ") para " + command.trim());
+            String address = connectedDevice.getAddress();
+            prefs.edit().putString(PREF_LAST_ADDRESS, address).apply();
+            String name = connectedDevice.getName() != null ? connectedDevice.getName() : address;
+            setStatus(GREEN, "Conectado a " + name, "Modelo " + model + "  ·  Preset " + preset + "  ·  " + address);
+            setConnectedInfo(name, "Modelo " + model + " · Preset " + preset,
+                    "Modelo " + model + "  ·  Preset " + preset + "\n" + address, GREEN);
         }
+        config = null;
+        setState(State.CONNECTED);
+        session.readConfig();
     }
 
     // ---------------------------------------------------------------- Log / errores
@@ -2487,12 +2190,11 @@ public class MaxoXActivity extends Activity {
     }
 
     private void fail(String message) {
-        handler.removeCallbacks(timeoutRunnable);
+        closeSession();
         handler.removeCallbacks(scanTimeoutRunnable);
         if (state == State.SCANNING && bluetoothLeScanner != null) {
             bluetoothLeScanner.stopScan(scanCallback);
         }
-        waitingForPasswordResponse = false;
         log("ERROR: " + message);
         setStatus(RED, "Error", message);
         setState(State.IDLE);
@@ -2503,6 +2205,6 @@ public class MaxoXActivity extends Activity {
         super.onDestroy();
         connectedActivity = new WeakReference<>(null);
         stopScan();
-        closeGatt();
+        closeSession();
     }
 }

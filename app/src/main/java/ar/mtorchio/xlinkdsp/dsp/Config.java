@@ -1,4 +1,4 @@
-package ar.mtorchio.xlinkdsp;
+package ar.mtorchio.xlinkdsp.dsp;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -31,15 +31,15 @@ import java.util.regex.Pattern;
  * Q / R = del pasa bajos (LPF). La pendiente viene como texto ("OFF", "12DBBTW"...).
  * Limiter (xair Limiter): G = umbral (dB, -54..+6), I = attack (ms), H = decay (ms).
  */
-final class DspConfig {
+public final class Config {
 
     /** Banda editable: el editor de EQ la modifica en el lugar y manda el cambio al DSP. */
-    static final class Band {
-        float frequency;
-        float q;
-        float gainDb;
+    public static final class Band {
+        public float frequency;
+        public float q;
+        public float gainDb;
 
-        Band(float frequency, float q, float gainDb) {
+        public Band(float frequency, float q, float gainDb) {
             this.frequency = frequency;
             this.q = q;
             this.gainDb = gainDb;
@@ -53,30 +53,30 @@ final class DspConfig {
     // Ecualizador gráfico de 1/3 de octava: Q = sqrt(2^(1/3)) / (2^(1/3) - 1).
     private static final float THIRD_OCTAVE_Q = 4.32f;
     // Rótulos de EQIN para la serie PX (rama "else" de xair EQIN).
-    static final float[] INPUT_EQ_FREQUENCIES = {
+    public static final float[] INPUT_EQ_FREQUENCIES = {
             31, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800,
             1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000
     };
 
-    final Map<Character, String> blocks;
-    final List<List<Band>> eqChannels;
-    final List<Band> inputEq;
+    public final Map<Character, String> blocks;
+    public final List<List<Band>> eqChannels;
+    public final List<Band> inputEq;
     // Editables desde la solapa Ganancias. mainGain = NaN si no vino el bloque X.
-    float mainGain;
-    final float[] channelGains;
-    final boolean[] channelMutes;
-    final int[] routing;
-    final int[] phase;
-    final int[] delays;
-    final int[] hpfFreq;
-    final String[] hpfSlope;
-    final int[] lpfFreq;
-    final String[] lpfSlope;
-    final int[] limThreshold;
-    final int[] limAttack;
-    final int[] limDecay;
+    public float mainGain;
+    public final float[] channelGains;
+    public final boolean[] channelMutes;
+    public final int[] routing;
+    public final int[] phase;
+    public final int[] delays;
+    public final int[] hpfFreq;
+    public final String[] hpfSlope;
+    public final int[] lpfFreq;
+    public final String[] lpfSlope;
+    public final int[] limThreshold;
+    public final int[] limAttack;
+    public final int[] limDecay;
 
-    private DspConfig(Map<Character, String> blocks, List<List<Band>> eqChannels, List<Band> inputEq) {
+    private Config(Map<Character, String> blocks, List<List<Band>> eqChannels, List<Band> inputEq) {
         this.blocks = blocks;
         this.eqChannels = eqChannels;
         this.inputEq = inputEq;
@@ -141,7 +141,7 @@ final class DspConfig {
     }
 
     /** Saca el eco del módulo BLE ("AT+LESEND=182,") y los saltos de línea. */
-    static String clean(String raw) {
+    public static String clean(String raw) {
         return MODULE_PREFIX.matcher(raw).replaceAll("")
                 .replace("\r", "")
                 .replace("\n", "")
@@ -150,13 +150,13 @@ final class DspConfig {
     }
 
     /** true cuando llegó el volcado completo: empieza y termina con '$'. */
-    static boolean isComplete(String raw) {
+    public static boolean isComplete(String raw) {
         String cleaned = clean(raw);
         int first = cleaned.indexOf('$');
         return first >= 0 && cleaned.length() > first + 1 && cleaned.endsWith("$");
     }
 
-    static DspConfig parse(String raw) {
+    public static Config parse(String raw) {
         String cleaned = clean(raw);
         int first = cleaned.indexOf('$');
         int last = cleaned.lastIndexOf('$');
@@ -188,7 +188,7 @@ final class DspConfig {
             }
             eq.add(Collections.unmodifiableList(bands));
         }
-        return new DspConfig(Collections.unmodifiableMap(blocks), Collections.unmodifiableList(eq),
+        return new Config(Collections.unmodifiableMap(blocks), Collections.unmodifiableList(eq),
                 inputEq(blocks.get('A')));
     }
 

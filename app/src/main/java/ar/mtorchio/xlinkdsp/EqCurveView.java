@@ -9,6 +9,8 @@ import android.graphics.Shader;
 import android.view.MotionEvent;
 import android.view.View;
 
+import ar.mtorchio.xlinkdsp.dsp.Config;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -44,7 +46,7 @@ final class EqCurveView extends View {
     private final Path curve = new Path();
     private final Path fill = new Path();
 
-    private List<DspConfig.Band> bands = new ArrayList<>();
+    private List<Config.Band> bands = new ArrayList<>();
     private int highlightedBand = -1;
     private boolean graphic;
     private float maxGainDb = RANGE_DB;
@@ -71,7 +73,7 @@ final class EqCurveView extends View {
     }
 
     /** graphic = EQ de entrada (frecuencias fijas); maxGainDb = rango de ganancia editable. */
-    void setBands(List<DspConfig.Band> bands, boolean graphic, float maxGainDb) {
+    void setBands(List<Config.Band> bands, boolean graphic, float maxGainDb) {
         this.bands = bands != null ? bands : new ArrayList<>();
         this.graphic = graphic;
         this.maxGainDb = maxGainDb;
@@ -106,7 +108,7 @@ final class EqCurveView extends View {
                 return true;
             case MotionEvent.ACTION_MOVE:
                 if (draggingBand >= 0) {
-                    DspConfig.Band band = bands.get(draggingBand);
+                    Config.Band band = bands.get(draggingBand);
                     float gain = Math.round(dbFor(event.getY()));
                     gain = Math.max(-maxGainDb, Math.min(maxGainDb, gain));
                     float frequency = graphic ? band.frequency : roundHz(hzFor(event.getX()));
@@ -137,7 +139,7 @@ final class EqCurveView extends View {
         int best = -1;
         float bestDistance = graphic ? Float.MAX_VALUE : 36 * density;
         for (int i = 0; i < bands.size(); i++) {
-            DspConfig.Band band = bands.get(i);
+            Config.Band band = bands.get(i);
             float dx = xFor(band.frequency, left, right) - x;
             float dy = graphic ? 0 : yFor(Math.max(-RANGE_DB, Math.min(RANGE_DB, band.gainDb)), top, bottom) - y;
             float distance = (float) Math.hypot(dx, dy);
@@ -202,7 +204,7 @@ final class EqCurveView extends View {
         for (int i = 0; i <= POINTS; i++) {
             double hz = MIN_HZ * Math.pow(MAX_HZ / MIN_HZ, (double) i / POINTS);
             double db = 0;
-            for (DspConfig.Band band : bands) {
+            for (Config.Band band : bands) {
                 db += peakingDb(hz, band);
             }
             float x = xFor((float) hz, left, right);
@@ -221,7 +223,7 @@ final class EqCurveView extends View {
 
         // Puntos de las bandas
         for (int i = 0; i < bands.size(); i++) {
-            DspConfig.Band band = bands.get(i);
+            Config.Band band = bands.get(i);
             if (band.frequency < MIN_HZ || band.frequency > MAX_HZ) {
                 continue;
             }
@@ -246,7 +248,7 @@ final class EqCurveView extends View {
     }
 
     /** Magnitud (dB) de un filtro peaking RBJ en la frecuencia hz. */
-    private static double peakingDb(double hz, DspConfig.Band band) {
+    private static double peakingDb(double hz, Config.Band band) {
         if (band.gainDb == 0 || band.frequency <= 0 || band.q <= 0 || band.frequency >= SAMPLE_RATE / 2) {
             return 0;
         }

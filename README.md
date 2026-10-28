@@ -34,7 +34,16 @@ BLE con el servicio `fff0`: se escribe por `fff2` y se lee por notificaciones en
 2. Con `a;` el DSP devuelve toda su configuración en bloques (`A[..]B[..]…`).
 3. Cada escritura es un comando como `[100][canal][dB]`, y el DSP contesta `OK`.
 
-El detalle de bloques y comandos está en `DspConfig.java` y en los comentarios de `MaxoXActivity.java`.
+Todo el protocolo vive en el package `dsp`, separado de las pantallas:
+
+| Clase | Qué hace |
+|---|---|
+| `Commands` | Arma cada comando de escritura, con los rangos de cada valor |
+| `Config` | Parsea el volcado de configuración |
+| `Session` | Login, cola de escrituras y espera del `OK` |
+| `Transport` | Interfaz para llevar líneas al DSP: `BleTransport` (Bluetooth) y `MockTransport` (demo y tests) |
+
+Los tests (`./gradlew testDebugUnitTest`) fijan los strings exactos que recibe el DSP.
 
 ## Compilar
 

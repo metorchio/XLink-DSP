@@ -7,6 +7,8 @@ import android.graphics.Path;
 import android.view.MotionEvent;
 import android.view.View;
 
+import ar.mtorchio.xlinkdsp.dsp.Config;
+
 /**
  * Mapa de frecuencias del crossover: la respuesta HPF x LPF de cada canal
  * superpuesta (20 Hz..20 kHz log, +6..-36 dB). El canal elegido va resaltado y
@@ -19,14 +21,6 @@ final class CrossoverView extends View {
         void onCutoffChanged(int channel, boolean hpf, float frequency, boolean done);
     }
 
-    // Opciones de xair (array spinnerHPF, igual para HPF y LPF) y su rótulo corto.
-    static final String[] SLOPES = {
-            "OFF", "6DBBTW", "12DBBTW", "18DBBTW", "24DBBTW",
-            "12DBLKR", "24DBLKR", "36DBLKR", "48DBLKR", "12DBBES", "24DBBES"
-    };
-    static final String[] SLOPE_LABELS = {
-            "OFF", "BW 6", "BW 12", "BW 18", "BW 24", "LR 12", "LR 24", "LR 36", "LR 48", "BS 12", "BS 24"
-    };
     static final int[] CHANNEL_COLORS = {
             0xFF00E5FF, 0xFF4DD0E1, 0xFF7C4DFF, 0xFFB388FF, 0xFFFF8A1F, 0xFFFF3D7F
     };
@@ -46,7 +40,7 @@ final class CrossoverView extends View {
     private final Paint handlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
 
-    private DspConfig config;
+    private Config config;
     private int selected;
     private int linked = -1;
     private Listener listener;
@@ -68,7 +62,7 @@ final class CrossoverView extends View {
         handlePaint.setStyle(Paint.Style.FILL);
     }
 
-    void setConfig(DspConfig config) {
+    void setConfig(Config config) {
         this.config = config;
         invalidate();
     }

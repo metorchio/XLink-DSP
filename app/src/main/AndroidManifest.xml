@@ -21,7 +21,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.WidgetEXe">
         <activity
-            android:name=".MaxoXActivity"
+            android:name=".XLinkActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

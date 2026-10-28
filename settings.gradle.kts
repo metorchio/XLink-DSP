@@ -19,6 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Widget eXe"
+rootProject.name = "XLink DSP"
 include(":app")
  

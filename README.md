@@ -26,6 +26,8 @@ La idea es documentar el protocolo y tener un código abierto, simple y moderno 
 | EQ | 🔧 en prueba |
 | Crossover, limiter, widget | ⏳ sin probar |
 
+¿Tenés otro modelo de Expert? Probá la app y contanos cómo anduvo con un [issue de modelo nuevo](.github/ISSUE_TEMPLATE/nuevo-modelo.md). Así se va sumando soporte.
+
 ## Protocolo, en corto
 
 BLE con el servicio `fff0`: se escribe por `fff2` y se lee por notificaciones en `fff1`.
@@ -33,6 +35,8 @@ BLE con el servicio `fff0`: se escribe por `fff2` y se lee por notificaciones en
 1. Login: `AT+LESEND=0`, después `[0][password]`. El DSP responde `[77][1][modelo][preset]`.
 2. Con `a;` el DSP devuelve toda su configuración en bloques (`A[..]B[..]…`).
 3. Cada escritura es un comando como `[100][canal][dB]`, y el DSP contesta `OK`.
+
+El detalle completo, con qué está verificado y qué no, está en **[PROTOCOL.md](PROTOCOL.md)**.
 
 Todo el protocolo vive en el package `dsp`, separado de las pantallas:
 
@@ -54,6 +58,10 @@ Abrir el proyecto en Android Studio, o:
 ```
 
 Requiere Android 15 o más (minSdk 35).
+
+## Licencia
+
+[GPL-3.0](LICENSE). Podés usar, modificar y redistribuir el código, incluso cobrando, siempre que lo que distribuyas también sea GPL-3.0 y con su código fuente.
 
 ## Aviso
 

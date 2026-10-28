@@ -39,7 +39,11 @@ public final class Commands {
 
     // ---------------------------------------------------------------- Sesión
 
-    /** Limpia el módulo BLE antes del login (xair BluetoothLeService.cleanLE). */
+    /**
+     * La app oficial lo manda siempre antes de la password y lo llama "CLEAN"
+     * (xair BluetoothLeService.cleanLE). No sabemos con certeza qué hace:
+     * probablemente limpia el estado del módulo BLE. No se probó sin mandarlo.
+     */
     static final String CLEAN = "AT+LESEND=0";
 
     /** Login: el DSP contesta [77][1][modelo][preset], o [24]ER si la password es incorrecta. */

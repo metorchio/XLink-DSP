@@ -61,6 +61,8 @@ Requiere Android 15 o más (minSdk 35).
 
 ## Licencia
 
+Copyright (C) 2026 Maximiliano Torchio.
+
 [GPL-3.0](LICENSE). Podés usar, modificar y redistribuir el código, incluso cobrando, siempre que lo que distribuyas también sea GPL-3.0 y con su código fuente.
 
 ## Aviso

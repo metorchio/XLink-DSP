@@ -1,3 +1,9 @@
+/*
+ * XLink DSP
+ * Copyright (C) 2026 Maximiliano Torchio
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 package ar.mtorchio.xlinkdsp
 
 import androidx.test.platform.app.InstrumentationRegistry

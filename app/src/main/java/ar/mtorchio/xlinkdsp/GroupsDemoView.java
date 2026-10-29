@@ -18,16 +18,13 @@ import android.view.animation.LinearInterpolator;
 
 /**
  * Animación en loop de la ayuda de grupos: un dedo agarra la pill de CH1, la
- * arrastra sobre CH2, CH2 copia sus ajustes (la barrita de abajo) y las dos
- * pills se funden en "CH1 · CH2".
+ * arrastra sobre CH2 y las dos pills se funden en "CH1 · CH2".
  */
 final class GroupsDemoView extends View {
 
     private static final int STROKE = 0xFF262C3A;
     private static final int TEXT = 0xFFE8ECF4;
     private static final int CYAN = 0xFF00E5FF;
-    private static final int ORANGE = 0xFFFF8A1F;
-    private static final int VIOLET = 0xFF7C4DFF;
 
     private static final long LOOP_MS = 4600;
     // Momentos de la animación, en ms dentro del loop.
@@ -35,8 +32,6 @@ final class GroupsDemoView extends View {
             FADE = 4200;
 
     private static final String[] NAMES = {"CH1", "CH2", "CH3"};
-    private static final float[] LEVELS = {0.75f, 0.3f, 0.5f};
-    private static final int[] COLORS = {ORANGE, VIOLET, VIOLET};
 
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -73,7 +68,7 @@ final class GroupsDemoView extends View {
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         setMeasuredDimension(getDefaultSize(getSuggestedMinimumWidth(), widthMeasureSpec),
-                Math.round(84 * density));
+                Math.round(62 * density));
     }
 
     @Override
@@ -114,22 +109,10 @@ final class GroupsDemoView extends View {
         float alpha = 1 - phase(t, FADE, LOOP_MS);
         float lift = phase(t, PRESS, DRAG) * (1 - phase(t, DROP, COPY));
         float drag = ease(phase(t, DRAG, DROP));
-        float copy = ease(phase(t, DROP, COPY));
         float merge = ease(phase(t, COPY, MERGE));
         RectF ch1 = pills[0];
         RectF ch2 = pills[1];
         float dx = ch2.left - ch1.left;
-
-        // Barritas: los ajustes de cada canal. CH2 pasa a tener los de CH1.
-        for (int i = 0; i < NAMES.length; i++) {
-            float level = LEVELS[i];
-            int color = COLORS[i];
-            if (i == 1) {
-                level += (LEVELS[0] - level) * copy;
-                color = (int) argb.evaluate(copy, color, COLORS[0]);
-            }
-            drawBar(canvas, pills[i], level, color, alpha);
-        }
 
         // CH3 queda suelto.
         drawPill(canvas, pills[2], NAMES[2], STROKE, 0, TEXT, alpha);
@@ -201,20 +184,6 @@ final class GroupsDemoView extends View {
         textPaint.setAlpha(Math.round(0xFF * alpha));
         float y = r.centerY() - (textPaint.descent() + textPaint.ascent()) / 2;
         canvas.drawText(text, r.centerX(), y, textPaint);
-    }
-
-    private void drawBar(Canvas canvas, RectF pill, float level, int color, float alpha) {
-        float inset = 8 * density;
-        float top = pill.bottom + 12 * density;
-        float height = 4 * density;
-        rect.set(pill.left + inset, top, pill.right - inset, top + height);
-        fillPaint.setColor(STROKE);
-        fillPaint.setAlpha(Math.round(0xFF * alpha));
-        canvas.drawRoundRect(rect, height / 2, height / 2, fillPaint);
-        rect.right = rect.left + rect.width() * level;
-        fillPaint.setColor(color);
-        fillPaint.setAlpha(Math.round(0xFF * alpha));
-        canvas.drawRoundRect(rect, height / 2, height / 2, fillPaint);
     }
 
     /** 0 antes de start, 1 después de end, lineal en el medio. */

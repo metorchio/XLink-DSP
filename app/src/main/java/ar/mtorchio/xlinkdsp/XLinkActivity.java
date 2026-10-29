@@ -1821,6 +1821,10 @@ public class XLinkActivity extends Activity {
         refreshAfterGroups();
         if (groupsOn && !prefs.getBoolean(PREF_GROUPS_HELP_HIDDEN, false)) {
             showGroupsHelp();
+        } else {
+            // Recordatorio de que mantenerla apretada abre la edición de grupos.
+            android.widget.Toast.makeText(this, (groupsOn ? "Grupos prendidos" : "Grupos apagados")
+                    + " · mantené apretada la cadena para editarlos", android.widget.Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -1903,7 +1907,8 @@ public class XLinkActivity extends Activity {
             body.addView(empty);
             return;
         }
-        TextView hint = text("Arrastrá un canal sobre otro para vincularlos. El que agarrás manda.", 13, MUTED);
+        TextView hint = text("Mantené apretado un canal y arrastralo sobre otro, o tocalo para elegir con cuál "
+                + "vincularlo. El que agarrás manda.", 13, MUTED);
         hint.setPadding(0, dp(14), 0, 0);
         body.addView(hint);
         body.addView(new GroupsDemoView(this));

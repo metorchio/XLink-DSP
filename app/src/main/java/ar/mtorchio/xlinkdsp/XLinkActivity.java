@@ -108,6 +108,8 @@ public class XLinkActivity extends Activity {
     private static final int PAGE_CROSSOVER = 1;
     private static final int PAGE_EQ = 2;
     private static final int PAGE_GAIN = 3;
+    private static final String SOURCE_URL = "https://github.com/metorchio/XLink-DSP";
+    private static final String LICENSE_URL = "https://www.gnu.org/licenses/gpl-3.0.html";
     private static final String PREF_GROUPS_ON = "groups_on";
     private static final String PREF_GROUPS_HELP_HIDDEN = "groups_help_hidden";
     // + dirección Bluetooth del equipo ("demo" en el modo demo): grupos de cada DSP.
@@ -719,6 +721,14 @@ public class XLinkActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(46));
         groupsEntryParams.topMargin = dp(8);
         drawer.addView(groupsEntry, groupsEntryParams);
+        TextView aboutEntry = button("Acerca de XLink DSP", TEXT, false);
+        aboutEntry.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
+                rounded(0x00000000, CARD_STROKE, 12), null));
+        aboutEntry.setOnClickListener(v -> showAbout());
+        LinearLayout.LayoutParams aboutParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(46));
+        aboutParams.topMargin = dp(8);
+        drawer.addView(aboutEntry, aboutParams);
         drawerLogHolder = new LinearLayout(this);
         drawerLogHolder.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams holderParams = new LinearLayout.LayoutParams(
@@ -2673,6 +2683,34 @@ public class XLinkActivity extends Activity {
                 .withEndAction(() -> drawerScrim.setVisibility(View.GONE)).start();
         drawerPanel.animate().translationX(-dp(300)).setDuration(180)
                 .withEndAction(() -> drawerPanel.setVisibility(View.GONE)).start();
+    }
+
+    /** Avisos legales de la GPL: autor, licencia, sin garantía y dónde está el código. */
+    private void showAbout() {
+        TextView body = text("Versión " + BuildConfig.GIT_SHA + "\n\n"
+                + "© 2026 Maximiliano Torchio\n\n"
+                + "XLink DSP es software libre: podés redistribuirlo y modificarlo bajo los términos de la "
+                + "Licencia Pública General GNU (GPL), versión 3 o posterior.\n\n"
+                + "Se distribuye sin ninguna garantía, ni siquiera la de servir para un propósito en particular. "
+                + "Los detalles están en la licencia.\n\n"
+                + "Proyecto independiente, sin relación con Expert Electronics.", 14, TEXT);
+        body.setLineSpacing(dp(2), 1f);
+        body.setPadding(dp(24), dp(8), dp(24), 0);
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("XLink DSP")
+                .setView(body)
+                .setPositiveButton("Cerrar", null)
+                .setNeutralButton("Licencia", (dialog, which) -> openUrl(LICENSE_URL))
+                .setNegativeButton("Código fuente", (dialog, which) -> openUrl(SOURCE_URL))
+                .show();
+    }
+
+    private void openUrl(String url) {
+        try {
+            startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)));
+        } catch (android.content.ActivityNotFoundException e) {
+            android.widget.Toast.makeText(this, url, android.widget.Toast.LENGTH_LONG).show();
+        }
     }
 
     /** Corta la conexión (real o demo) y vuelve a la pantalla de conexión, que busca sola. */

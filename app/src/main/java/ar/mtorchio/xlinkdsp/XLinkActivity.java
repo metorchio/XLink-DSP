@@ -236,6 +236,22 @@ public class XLinkActivity extends Activity {
     private View mainScreen;
     private LinearLayout logBlock;
     private LinearLayout drawerLogHolder;
+    // Log técnico a pantalla completa (desde el panel), con buscador.
+    private static final int LOG_MAX_LINES = 3000;
+    private final List<String> logLines = new ArrayList<>();
+    private View logScreen;
+    private EditText logSearch;
+    private TextView logFull;
+    private ScrollView logFullScroll;
+    private TextView logCount;
+    private FollowView logFollow;
+    private TextView logJump;
+    private int logShown;
+    // El log se movió porque lo arrastró el dedo (no porque la app lo llevó al final).
+    private boolean logUserScroll;
+    private final android.window.OnBackInvokedCallback closeLogOnBack = this::closeLogScreen;
+    // DSP conectado, para el encabezado del log compartido (null sin equipo).
+    private String connectedSummary;
     private View drawerScrim;
     private View drawerPanel;
     private boolean drawerOpen = false;
@@ -751,6 +767,17 @@ public class XLinkActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(46));
         aboutParams.topMargin = dp(8);
         drawer.addView(aboutEntry, aboutParams);
+        TextView logEntry = button("Log", TEXT, false);
+        logEntry.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
+                rounded(0x00000000, CARD_STROKE, 12), null));
+        logEntry.setOnClickListener(v -> {
+            closeDrawer();
+            openLogScreen();
+        });
+        LinearLayout.LayoutParams logEntryParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(46));
+        logEntryParams.topMargin = dp(8);
+        drawer.addView(logEntry, logEntryParams);
         drawerLogHolder = new LinearLayout(this);
         drawerLogHolder.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams holderParams = new LinearLayout.LayoutParams(
@@ -758,6 +785,116 @@ public class XLinkActivity extends Activity {
         holderParams.topMargin = dp(16);
         drawer.addView(drawerLogHolder, holderParams);
         drawer.addView(text("XLink DSP · " + BuildConfig.GIT_SHA, 11, MUTED));
+
+        // ===== Log técnico a pantalla completa
+        LinearLayout logPage = new LinearLayout(this);
+        logPage.setOrientation(LinearLayout.VERTICAL);
+        logPage.setBackgroundColor(BG);
+        logPage.setClickable(true);
+        logPage.setVisibility(View.GONE);
+        logScreen = logPage;
+        LinearLayout logTop = new LinearLayout(this);
+        logTop.setGravity(Gravity.CENTER_VERTICAL);
+        TextView logTitle = pageTitle("Log");
+        logTop.addView(logTitle, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        // Seguir (tail -f): prendido, el log va a la última línea con cada línea nueva.
+        logFollow = new FollowView(this);
+        logFollow.setOnClickListener(v -> setLogFollow(!logFollow.isOn()));
+        LinearLayout.LayoutParams followParams = new LinearLayout.LayoutParams(dp(40), dp(34));
+        followParams.rightMargin = dp(8);
+        logTop.addView(logFollow, followParams);
+        TextView share = stepButton("Compartir");
+        share.setTextSize(13);
+        share.setPadding(dp(12), 0, dp(12), 0);
+        share.setOnClickListener(v -> shareLog());
+        logTop.addView(share, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)));
+        TextView clear = stepButton("Limpiar");
+        clear.setTextSize(13);
+        clear.setPadding(dp(12), 0, dp(12), 0);
+        clear.setOnClickListener(v -> clearLog());
+        LinearLayout.LayoutParams clearParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(34));
+        clearParams.leftMargin = dp(8);
+        logTop.addView(clear, clearParams);
+        TextView closeLog = stepButton("✕");
+        closeLog.setOnClickListener(v -> closeLogScreen());
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(dp(40), dp(34));
+        closeParams.leftMargin = dp(8);
+        logTop.addView(closeLog, closeParams);
+        logPage.addView(logTop);
+        logSearch = new EditText(this);
+        logSearch.setHint("Buscar en el log (ej. TX, Monitor, error)");
+        logSearch.setHintTextColor(MUTED);
+        logSearch.setTextColor(TEXT);
+        logSearch.setTextSize(14);
+        logSearch.setSingleLine(true);
+        logSearch.setBackground(rounded(CARD, CARD_STROKE, 12));
+        logSearch.setPadding(dp(14), 0, dp(14), 0);
+        logSearch.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence text, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence text, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable text) {
+                renderLogScreen();
+            }
+        });
+        LinearLayout.LayoutParams searchParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(44));
+        searchParams.topMargin = dp(12);
+        logPage.addView(logSearch, searchParams);
+        logCount = text("", 12, MUTED);
+        logCount.setPadding(dp(4), dp(6), 0, dp(6));
+        logPage.addView(logCount);
+        logFull = text("", 12, TEXT);
+        logFull.setTypeface(Typeface.MONOSPACE);
+        logFull.setTextIsSelectable(true);
+        logFull.setLineSpacing(dp(2), 1f);
+        logFullScroll = new ScrollView(this);
+        logFullScroll.setVerticalScrollBarEnabled(false);
+        logFullScroll.addView(logFull);
+        LinearLayout logCard = card();
+        logCard.addView(logFullScroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
+        // Subir con el dedo a mirar algo apaga el seguir; volver abajo de todo lo prende de nuevo.
+        logFullScroll.setOnTouchListener((v, event) -> {
+            logUserScroll = true;
+            return false;
+        });
+        logFullScroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> {
+            if (!logUserScroll) {
+                return;
+            }
+            if (y < oldY) {
+                setLogFollow(false);
+            } else if (logAtBottom()) {
+                setLogFollow(true);
+            }
+        });
+        // Con seguir apagado aparece abajo una flechita para volver a la última línea.
+        android.widget.FrameLayout logFrame = new android.widget.FrameLayout(this);
+        logFrame.addView(logCard, new android.widget.FrameLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
+        logJump = text("↓", 20, BG);
+        logJump.setTypeface(Typeface.DEFAULT_BOLD);
+        logJump.setGravity(Gravity.CENTER);
+        logJump.setBackground(rounded(ORANGE, ORANGE, 22));
+        logJump.setElevation(dp(6));
+        logJump.setContentDescription("Ir a la última línea");
+        logJump.setOnClickListener(v -> setLogFollow(true));
+        android.widget.FrameLayout.LayoutParams jumpParams = new android.widget.FrameLayout.LayoutParams(
+                dp(44), dp(44), Gravity.BOTTOM | Gravity.END);
+        jumpParams.rightMargin = dp(14);
+        jumpParams.bottomMargin = dp(14);
+        logFrame.addView(logJump, jumpParams);
+        logPage.addView(logFrame, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        root.addView(logPage, new android.widget.FrameLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
 
         // ===== EQ de entrada agrandado (encima de todo, oculto hasta que se agranda)
         LinearLayout expanded = new LinearLayout(this);
@@ -825,6 +962,7 @@ public class XLinkActivity extends Activity {
             drawer.setPadding(dp(20) + bars.left, bars.top + dp(20), dp(20), bars.bottom + dp(16));
             Insets safe = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
             expanded.setPadding(pad + safe.left, dp(12) + safe.top, pad + safe.right, dp(8) + safe.bottom);
+            logPage.setPadding(pad + bars.left, pad + bars.top, pad + bars.right, pad + bars.bottom);
             return insets;
         });
 
@@ -2668,8 +2806,15 @@ public class XLinkActivity extends Activity {
     }
 
     /** El log técnico vive debajo de Conectar o, con un equipo conectado, en el panel lateral. */
+    /** El desplegable del log solo va en la pantalla de conexión; conectado, el log se abre desde el panel. */
     private void placeLog(boolean connected) {
-        ViewGroup target = connected ? drawerLogHolder : (ViewGroup) connectScreen;
+        if (connected) {
+            if (logBlock.getParent() != null) {
+                ((ViewGroup) logBlock.getParent()).removeView(logBlock);
+            }
+            return;
+        }
+        ViewGroup target = (ViewGroup) connectScreen;
         if (logBlock.getParent() == target) {
             return;
         }
@@ -2684,6 +2829,125 @@ public class XLinkActivity extends Activity {
             target.addView(logBlock);
             logScroll.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(130)));
         }
+    }
+
+    private void openLogScreen() {
+        logScreen.setVisibility(View.VISIBLE);
+        renderLogScreen();
+        setLogFollow(true);
+        getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, closeLogOnBack);
+    }
+
+    private void closeLogScreen() {
+        if (logScreen.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        logScreen.setVisibility(View.GONE);
+        getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(closeLogOnBack);
+        android.view.inputmethod.InputMethodManager keyboard =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        keyboard.hideSoftInputFromWindow(logSearch.getWindowToken(), 0);
+    }
+
+    /** Las líneas que tienen lo buscado (sin distinguir mayúsculas), con la coincidencia resaltada. */
+    private void renderLogScreen() {
+        String query = logSearch.getText().toString().trim().toLowerCase(Locale.ROOT);
+        android.text.SpannableStringBuilder out = new android.text.SpannableStringBuilder();
+        int shown = 0;
+        for (String line : logLines) {
+            String lower = line.toLowerCase(Locale.ROOT);
+            if (!query.isEmpty() && !lower.contains(query)) {
+                continue;
+            }
+            int start = out.length();
+            out.append(line).append('\n');
+            if (!query.isEmpty()) {
+                for (int at = lower.indexOf(query); at >= 0; at = lower.indexOf(query, at + query.length())) {
+                    out.setSpan(new android.text.style.BackgroundColorSpan(0x66FF8A1F),
+                            start + at, start + at + query.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+            }
+            shown++;
+        }
+        logShown = shown;
+        int keepY = logFullScroll.getScrollY();
+        logFull.setText(out);
+        updateLogCount();
+        // Siguiendo va a la última línea; si no, se queda donde estabas mirando.
+        logFullScroll.post(() -> logFullScroll.scrollTo(0, logFollow.isOn() ? logFull.getHeight() : keepY));
+    }
+
+    /**
+     * Una línea nueva con el log abierto: se agrega al final sin rearmar todo el texto
+     * (rearmarlo hace saltar el scroll). Solo baja si está prendido seguir.
+     */
+    private void appendLogScreen(String line) {
+        String query = logSearch.getText().toString().trim().toLowerCase(Locale.ROOT);
+        String lower = line.toLowerCase(Locale.ROOT);
+        if (!query.isEmpty() && !lower.contains(query)) {
+            updateLogCount();
+            return;
+        }
+        android.text.SpannableStringBuilder out = new android.text.SpannableStringBuilder(line + "\n");
+        if (!query.isEmpty()) {
+            for (int at = lower.indexOf(query); at >= 0; at = lower.indexOf(query, at + query.length())) {
+                out.setSpan(new android.text.style.BackgroundColorSpan(0x66FF8A1F),
+                        at, at + query.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+        }
+        logFull.append(out);
+        logShown++;
+        updateLogCount();
+        if (logFollow.isOn()) {
+            logFullScroll.post(() -> logFullScroll.scrollTo(0, logFull.getHeight()));
+        }
+    }
+
+    private void updateLogCount() {
+        boolean filtered = !logSearch.getText().toString().trim().isEmpty();
+        logCount.setText(filtered ? logShown + " de " + logLines.size() + " líneas" : logLines.size() + " líneas");
+    }
+
+    /** Seguir la última línea (prendido: baja al final y sigue bajando con cada línea nueva). */
+    private void setLogFollow(boolean follow) {
+        logFollow.setOn(follow);
+        logJump.setVisibility(follow ? View.GONE : View.VISIBLE);
+        logUserScroll = false;
+        if (follow) {
+            logFullScroll.post(() -> logFullScroll.smoothScrollTo(0, logFull.getHeight()));
+        }
+    }
+
+    private boolean logAtBottom() {
+        return logFullScroll.getScrollY() + logFullScroll.getHeight() >= logFull.getHeight() - dp(32);
+    }
+
+    private void clearLog() {
+        logLines.clear();
+        logView.setText("");
+        renderLogScreen();
+    }
+
+    /** Encabezado del log compartido: app y versión, el celular y el DSP conectado. */
+    private String logHeader() {
+        String filter = logSearch.getText().toString().trim();
+        return "XLink DSP " + BuildConfig.GIT_SHA + "\n"
+                + "Celular: " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
+                + " · Android " + android.os.Build.VERSION.RELEASE + " (API " + android.os.Build.VERSION.SDK_INT + ")\n"
+                + "DSP: " + (state == State.CONNECTED && connectedSummary != null ? connectedSummary : "sin conexión") + "\n"
+                + "Exportado: " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(new Date())
+                + (filter.isEmpty() ? "" : " · filtro \"" + filter + "\"") + "\n"
+                + "----------------------------------------\n";
+    }
+
+    /** Manda el log (lo que se ve con el filtro puesto) a otra app: WhatsApp, mail, copiar... */
+    private void shareLog() {
+        android.content.Intent send = new android.content.Intent(android.content.Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(android.content.Intent.EXTRA_SUBJECT, "XLink DSP · log " + BuildConfig.GIT_SHA);
+        send.putExtra(android.content.Intent.EXTRA_TEXT, logHeader() + logFull.getText());
+        startActivity(android.content.Intent.createChooser(send, "Compartir log"));
     }
 
     private void setConnectedInfo(String name, String subtitle, String detail) {
@@ -2766,7 +3030,7 @@ public class XLinkActivity extends Activity {
 
     private void setLogVisible(boolean visible) {
         logScroll.setVisibility(visible ? View.VISIBLE : View.GONE);
-        logToggle.setText(visible ? "▾  Ocultar log técnico" : "▸  Ver log técnico");
+        logToggle.setText(visible ? "▾  Ocultar log" : "▸  Ver log");
     }
 
     private void setStatus(int color, String title, String detail) {
@@ -3214,6 +3478,10 @@ public class XLinkActivity extends Activity {
 
     private void onAuthenticated(String model, String preset) {
         log("OK: autenticado — modelo " + model + ", preset " + preset);
+        connectedSummary = (demoMode ? MockTransport.DEVICE_NAME + " · datos simulados"
+                : (connectedDevice.getName() != null ? connectedDevice.getName() : "sin nombre")
+                        + " · " + connectedDevice.getAddress())
+                + " · modelo " + model + " · preset " + preset;
         if (demoMode) {
             setStatus(VIOLET, "Conectado a " + MockTransport.DEVICE_NAME,
                     "Modelo " + model + "  ·  Preset " + preset + "  ·  datos simulados");
@@ -3244,8 +3512,20 @@ public class XLinkActivity extends Activity {
         Log.i(TAG, message);
         String stamp = new SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(new Date());
         runOnUiThread(() -> {
-            logView.append(stamp + "  " + message + "\n");
-            logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+            String line = stamp + "  " + message;
+            logLines.add(line);
+            if (logLines.size() > LOG_MAX_LINES) {
+                logLines.remove(0);
+            }
+            boolean atBottom = logScroll.getScrollY() + logScroll.getHeight() >= logView.getHeight() - dp(32);
+            logView.append(line + "\n");
+            // scrollTo y no fullScroll: fullScroll le pasa el foco al texto y le saca el teclado al campo.
+            if (atBottom) {
+                logScroll.post(() -> logScroll.scrollTo(0, logView.getHeight()));
+            }
+            if (logScreen.getVisibility() == View.VISIBLE) {
+                appendLogScreen(line);
+            }
         });
     }
 

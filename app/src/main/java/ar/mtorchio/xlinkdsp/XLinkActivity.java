@@ -1394,8 +1394,8 @@ public class XLinkActivity extends Activity {
             SeekBar seekBar = new SeekBar(this);
             seekBar.setMax(Commands.DELAY_MAX_MM);
             seekBar.setProgress(Math.min(Commands.DELAY_MAX_MM, Math.max(0, config.delays[channel])));
-            seekBar.setProgressTintList(ColorStateList.valueOf(VIOLET));
-            seekBar.setThumbTintList(ColorStateList.valueOf(VIOLET));
+            seekBar.setProgressTintList(ColorStateList.valueOf(TEXT));
+            seekBar.setThumbTintList(ColorStateList.valueOf(TEXT));
             seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(CARD_STROKE));
             delayRow.addView(seekBar, new LinearLayout.LayoutParams(0, dp(36), 1f));
             TextView plus = stepButton("+");
@@ -2161,7 +2161,6 @@ public class XLinkActivity extends Activity {
         gainRows.removeAllViews();
         if (!Float.isNaN(config.mainGain)) {
             LinearLayout master = card();
-            master.addView(label("MASTER"));
             master.addView(gainRow("Master", -1, config.mainGain, Commands.MAIN_GAIN_MIN, Commands.MAIN_GAIN_MAX));
             gainRows.addView(master);
             LinearLayout channelsHeader = new LinearLayout(this);
@@ -2196,7 +2195,7 @@ public class XLinkActivity extends Activity {
     private View gainRow(String name, int channel, float gain, int min, int max) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, channel < 0 ? dp(6) : 0, 0, 0);
+        row.setPadding(0, 0, 0, 0);
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = text(name, 15, TEXT);
@@ -2234,8 +2233,10 @@ public class XLinkActivity extends Activity {
         seekBar.setMin(min);
         seekBar.setMax(max);
         seekBar.setProgress(Math.round(Math.max(min, Math.min(max, gain))));
-        seekBar.setProgressTintList(ColorStateList.valueOf(channel < 0 ? ORANGE : CYAN));
-        seekBar.setThumbTintList(ColorStateList.valueOf(channel < 0 ? ORANGE : CYAN));
+        // El master en naranja; los canales en blanco.
+        int sliderColor = channel < 0 ? ORANGE : TEXT;
+        seekBar.setProgressTintList(ColorStateList.valueOf(sliderColor));
+        seekBar.setThumbTintList(ColorStateList.valueOf(sliderColor));
         seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(CARD_STROKE));
         value.setText(String.format(Locale.ROOT, "%+d dB", seekBar.getProgress()));
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -2362,7 +2363,7 @@ public class XLinkActivity extends Activity {
         }
         if (channel < config.limAttack.length) {
             row.addView(miniSlider("Attack", Commands.LIMIT_ATTACK_MIN, Commands.LIMIT_ATTACK_MAX,
-                    config.limAttack[channel], "%d ms", VIOLET, value ->
+                    config.limAttack[channel], "%d ms", TEXT, value ->
                             forGainGroup(channel, config.limAttack.length, ch -> {
                                 config.limAttack[ch] = value;
                                 queueWrite(Commands.limiterAttack(ch, value));
@@ -2370,7 +2371,7 @@ public class XLinkActivity extends Activity {
         }
         if (channel < config.limDecay.length) {
             row.addView(miniSlider("Decay", Commands.LIMIT_DECAY_MIN, Commands.LIMIT_DECAY_MAX,
-                    config.limDecay[channel], "%d ms", VIOLET, value ->
+                    config.limDecay[channel], "%d ms", TEXT, value ->
                             forGainGroup(channel, config.limDecay.length, ch -> {
                                 config.limDecay[ch] = value;
                                 queueWrite(Commands.limiterDecay(ch, value));

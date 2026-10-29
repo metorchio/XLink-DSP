@@ -259,10 +259,8 @@ public class XLinkActivity extends Activity {
     private TextView xoLpfHint;
     private int xoSelected;
     private boolean limiterAuto;
-    // Mute del master: baja la ganancia al mínimo con un fade y la devuelve al sacarlo.
-    private boolean masterMuted;
-    private int masterBeforeMute;
-    private android.animation.ValueAnimator masterFade;
+    // Mute general ([999]): los mutes de cada canal antes de apretarlo, para devolverlos al sacarlo.
+    private boolean[] mutesBeforeMuteAll;
     // Canales vinculados del equipo conectado; solo se aplican con los grupos prendidos.
     private ChannelGroups groups = new ChannelGroups();
     private String groupsKey;
@@ -896,10 +894,7 @@ public class XLinkActivity extends Activity {
         log("Config: bloques " + loaded.blocks.keySet() + ", EQ " + loaded.eqChannels.size()
                 + " canales, EQ de entrada " + loaded.inputEq.size() + " bandas");
         runOnUiThread(() -> {
-            if (masterFade != null) {
-                masterFade.cancel();
-            }
-            masterMuted = false;
+            mutesBeforeMuteAll = null;
             eqCustom.clear();
             eqActivePreset.clear();
             buildGainRows();
@@ -2277,22 +2272,10 @@ public class XLinkActivity extends Activity {
         row.addView(sliderRow, seekParams);
         if (masterMute != null) {
             TextView muteChip = masterMute;
-            View[] controls = {seekBar, minus, plus};
-            // El slider queda visible (atenuado) pero no se mueve mientras está en mute.
-            seekBar.setOnTouchListener((v, event) -> masterMuted);
-            Runnable style = () -> {
-                muteChip.setTextColor(masterMuted ? BG : MUTED);
-                muteChip.setBackground(masterMuted ? rounded(RED, RED, 17) : rounded(0x00000000, CARD_STROKE, 17));
-                value.setAlpha(masterMuted ? 0.4f : 1f);
-                for (View control : controls) {
-                    if (control != seekBar) {
-                        control.setEnabled(!masterMuted);
-                    }
-                    control.setAlpha(masterMuted ? 0.4f : 1f);
-                }
-            };
-            muteChip.setOnClickListener(v -> toggleMasterMute(seekBar, style));
-            style.run();
+            boolean allMuted = allChannelsMuted();
+            muteChip.setTextColor(allMuted ? BG : MUTED);
+            muteChip.setBackground(allMuted ? rounded(RED, RED, 17) : rounded(0x00000000, CARD_STROKE, 17));
+            muteChip.setOnClickListener(v -> toggleMuteAll());
         }
         if (channel >= 0) {
             addLimiterRows(row, channel);
@@ -2300,39 +2283,47 @@ public class XLinkActivity extends Activity {
         return row;
     }
 
+    private boolean allChannelsMuted() {
+        if (config.channelMutes.length == 0) {
+            return false;
+        }
+        for (boolean muted : config.channelMutes) {
+            if (!muted) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
-     * Mute del master como un fade a mano: baja de a 1 dB hasta el mínimo y, al
-     * sacarlo, sube igual hasta donde estaba. Sale ya, aunque Live esté apagado.
+     * Mute general como el de la app oficial (pantalla Monitor): [999][-1][1] mutea
+     * todos los canales y [999][-1][0] los desmutea. Al sacarlo se vuelven a mutear
+     * los que ya estaban muteados antes. Sale ya, aunque Live esté apagado.
      */
-    private void toggleMasterMute(SeekBar seekBar, Runnable style) {
-        if (masterFade != null) {
-            masterFade.cancel();
+    private void toggleMuteAll() {
+        if (session == null) {
+            return;
         }
-        int from = seekBar.getProgress();
-        int to;
-        if (masterMuted) {
-            to = masterBeforeMute;
+        boolean mute = !allChannelsMuted();
+        if (mute) {
+            mutesBeforeMuteAll = config.channelMutes.clone();
+            java.util.Arrays.fill(config.channelMutes, true);
+            session.sendNow(Commands.muteAll(true));
         } else {
-            masterBeforeMute = from;
-            to = Commands.MAIN_GAIN_MIN;
-        }
-        masterMuted = !masterMuted;
-        style.run();
-        log("Master: " + (masterMuted ? "mute (fade a " + to + " dB)" : "vuelve a " + to + " dB"));
-        masterFade = android.animation.ValueAnimator.ofInt(from, to);
-        masterFade.setDuration(Math.max(200, Math.abs(to - from) * 25L));
-        masterFade.setInterpolator(new android.view.animation.LinearInterpolator());
-        masterFade.addUpdateListener(animation -> {
-            int db = (int) animation.getAnimatedValue();
-            if (db != Math.round(config.mainGain)) {
-                seekBar.setProgress(db);
-                config.mainGain = db;
-                if (session != null) {
-                    session.sendNow(Commands.masterGain(db));
+            java.util.Arrays.fill(config.channelMutes, false);
+            session.sendNow(Commands.muteAll(false));
+            if (mutesBeforeMuteAll != null) {
+                for (int ch = 0; ch < config.channelMutes.length && ch < mutesBeforeMuteAll.length; ch++) {
+                    if (mutesBeforeMuteAll[ch]) {
+                        config.channelMutes[ch] = true;
+                        session.sendNow(Commands.mute(ch, true));
+                    }
                 }
             }
-        });
-        masterFade.start();
+            mutesBeforeMuteAll = null;
+        }
+        log("Mute general " + (mute ? "prendido" : "apagado"));
+        buildGainRows();
     }
 
     /** channel = -1 para el master; un canal arrastra a su grupo. */

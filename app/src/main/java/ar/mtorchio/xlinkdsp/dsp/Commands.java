@@ -103,6 +103,11 @@ public final class Commands {
 
     // ---------------------------------------------------------------- Canales
 
+    /** [999][-1][1|0]: mute / desmute de todos los canales (xair Monitor). */
+    public static Command muteAll(boolean muted) {
+        return new Command("MUTEALL", "[999][-1][" + (muted ? 1 : 0) + "]");
+    }
+
     /** [3][ch][0|1|2]: ROUTE_LR, ROUTE_R o ROUTE_L. */
     public static Command routing(int channel, int route) {
         return new Command("ROUTE" + channel, "[3][" + channel + "][" + clamp(route, 0, 2) + "]");

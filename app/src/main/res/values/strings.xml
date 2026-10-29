@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">XLink DSP</string>
+    <string name="widget_description">Cambiá el EQ de entrada del DSP entre tu Custom y los presets</string>
+</resources>

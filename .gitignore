@@ -8,3 +8,12 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Kotlin (caché del compilador)
+.kotlin/
+
+# Binarios y firmas
+*.apk
+*.aab
+*.jks
+*.keystore

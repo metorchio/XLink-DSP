@@ -122,6 +122,7 @@ public class SessionTest {
     private Config config;
     private Integer flushedMissed;
     private String closedReason;
+    private MonitorReading monitor;
 
     @Before
     public void setUp() {
@@ -146,6 +147,11 @@ public class SessionTest {
             @Override
             public void onFlushed(int missedAcks) {
                 flushedMissed = missedAcks;
+            }
+
+            @Override
+            public void onMonitor(MonitorReading reading) {
+                monitor = reading;
             }
         });
     }
@@ -229,6 +235,29 @@ public class SessionTest {
         assertEquals("[100][-1][-20]\r\n", transport.written.get(0));
         assertEquals("[100][-1][-30]\r\n", transport.written.get(1));
         assertEquals(1, session.pendingCount());
+    }
+
+    @Test
+    public void monitorReadsVoltageAndLimiters() {
+        connect();
+        transport.written.clear();
+        session.requestMonitor();
+        clock.advance(1000);
+        assertEquals("V;\r\n", transport.written.get(0));
+        assertNotNull(monitor);
+        assertEquals(12.6f, monitor.voltage, 0.001f);
+        assertEquals(6, monitor.limiting.length);
+    }
+
+    @Test
+    public void monitorParsesCommaDecimalsAndMissingList() {
+        MonitorReading reading = MonitorReading.parse("AT+LESEND=182,[11,9][0!1!0!]");
+        assertEquals(11.9f, reading.voltage, 0.001f);
+        assertFalse(reading.limiting[0]);
+        assertTrue(reading.limiting[1]);
+        MonitorReading noList = MonitorReading.parse("[12,0][-]");
+        assertEquals(0, noList.limiting.length);
+        assertNull(MonitorReading.parse("AT+LESEND=182,[12,"));
     }
 
     @Test

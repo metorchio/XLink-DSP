@@ -43,6 +43,8 @@ public final class MockTransport implements Transport {
 
     private final Session.Scheduler scheduler;
     private Listener listener;
+    // Para que en el demo los limiters se prendan y apaguen.
+    private static int monitorTick;
     private boolean open;
 
     public MockTransport(Session.Scheduler scheduler) {
@@ -85,6 +87,15 @@ public final class MockTransport implements Transport {
         }
         if (command.equals(Commands.READ_CONFIG)) {
             return CONFIG_DUMP;
+        }
+        if (command.equals(Commands.MONITOR)) {
+            // Formato inferido de la app oficial (MonitorReading), no capturado del equipo.
+            monitorTick++;
+            StringBuilder limiters = new StringBuilder();
+            for (int ch = 0; ch < 6; ch++) {
+                limiters.append((monitorTick + ch * 2) % 7 == 0 ? 1 : 0).append('!');
+            }
+            return PREFIX + "[12,6][" + limiters + "]";
         }
         return command.startsWith("[") ? PREFIX + "OK" : null;
     }

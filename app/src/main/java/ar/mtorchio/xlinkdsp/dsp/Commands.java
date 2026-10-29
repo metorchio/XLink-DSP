@@ -59,6 +59,8 @@ public final class Commands {
 
     /** Pide el volcado completo de la configuración (ver Config). */
     public static final String READ_CONFIG = "a;";
+    /** Tensión y limiters actuando (respuesta en MonitorReading). */
+    public static final String MONITOR = "V;";
 
     // ---------------------------------------------------------------- Niveles
 

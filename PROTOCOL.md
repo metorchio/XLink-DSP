@@ -206,7 +206,14 @@ Lo más probable es que el DSP haga la misma cuenta al recibir `[113]`.
 
 | Comando | Qué hace | Estado |
 |---|---|---|
-| `V;` | Pide la tensión de alimentación | ❓ Falta capturar el formato real de la respuesta |
+| `V;` | Pide la tensión y qué limiters están actuando | ❓ Formato sacado de la app oficial, falta capturarlo con el equipo |
+| `[999][-1][0\|1]` | Mute de todos los canales a la vez (xair Monitor): es el mute por canal `[999][ch][…]` con canal `-1` | 🔧 |
+
+Respuesta a `V;` según la app oficial (pantalla Monitor, que lo pide cada 1 s):
+`[tensión][l1!l2!…]`. La tensión viene con coma decimal (`12,6`); cada `l` es `1` si el limiter
+de ese canal está limitando en ese momento (xair prende un LED por canal). Si la lista viene como
+`-`, no hay datos de limiter. La app loguea la respuesta cruda (`Monitor V; <- …`) cuando cambia,
+para confirmarlo.
 
 ---
 
@@ -228,9 +235,10 @@ Si tenés otro modelo de Expert, [abrí un issue](.github/ISSUE_TEMPLATE/nuevo-m
 
 - Si el DSP guarda los cambios en memoria al apagarse o solo los aplica en el momento.
 - Qué son los bloques `Y` y `f`.
-- La respuesta a `V;`.
+- El formato real de la respuesta a `V;` (ver sección 5).
 - Si `AT+LESEND=0` hace falta.
 - Cómo se cambia de preset.
+- Si `[999][-1][1]` (mute de todos) cambia el bloque `K` o es un estado aparte.
 - Probar con el equipo los comandos `[2]` del crossover (frecuencia y pendiente de HPF y LPF).
 - Qué hace el DSP si el HPF queda por encima del LPF (la app no lo deja; lo esperable es que el canal quede casi mudo).
 - Si `[2][ch][param]` acepta otro `param` además de 0..3 (por ejemplo, un segundo HPF). En la configuración solo vienen los bloques `N`/`O` (HPF) y `Q`/`R` (LPF).

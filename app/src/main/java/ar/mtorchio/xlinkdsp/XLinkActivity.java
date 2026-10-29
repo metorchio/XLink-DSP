@@ -242,10 +242,12 @@ public class XLinkActivity extends Activity {
     private final android.window.OnBackInvokedCallback closeDrawerOnBack = this::closeDrawer;
     private TextView topTitle;
     private TextView topSubtitle;
-    private View topDot;
+    private BluetoothView topBluetooth;
+    // Tensión de la batería (V;), al lado del punto de conexión.
+    private BatteryView topBattery;
     private TextView drawerName;
     private TextView drawerDetail;
-    private View drawerDot;
+    private BluetoothView drawerBluetooth;
     // Crossover
     private LinearLayout xoCard;
     private TextView xoEmpty;
@@ -259,6 +261,24 @@ public class XLinkActivity extends Activity {
     private TextView xoLpfHint;
     private int xoSelected;
     private boolean limiterAuto;
+    // Monitor (V;, como xair): cada 1 s con un equipo conectado, la tensión y qué limiters actúan.
+    private static final long MONITOR_MS = 1000;
+    private final List<LedView> limiterLeds = new ArrayList<>();
+    private ar.mtorchio.xlinkdsp.dsp.MonitorReading lastMonitor;
+    private String lastMonitorRaw;
+    private boolean resumed;
+    private final Runnable monitorPoll = new Runnable() {
+        @Override
+        public void run() {
+            if (!resumed) {
+                return;
+            }
+            if (session != null && config != null && state == State.CONNECTED) {
+                session.requestMonitor();
+            }
+            handler.postDelayed(this, MONITOR_MS);
+        }
+    };
     // Mute general ([999]): los mutes de cada canal antes de apretarlo, para devolverlos al sacarlo.
     private boolean[] mutesBeforeMuteAll;
     // Canales vinculados del equipo conectado; solo se aplican con los grupos prendidos.
@@ -420,8 +440,12 @@ public class XLinkActivity extends Activity {
         topSubtitle = text("", 12, MUTED);
         topTitles.addView(topSubtitle);
         topBar.addView(topTitles, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        topDot = new View(this);
-        topBar.addView(topDot, new LinearLayout.LayoutParams(dp(10), dp(10)));
+        topBattery = new BatteryView(this);
+        LinearLayout.LayoutParams batteryParams = new LinearLayout.LayoutParams(dp(46), dp(20));
+        batteryParams.rightMargin = dp(10);
+        topBar.addView(topBattery, batteryParams);
+        topBluetooth = new BluetoothView(this);
+        topBar.addView(topBluetooth, new LinearLayout.LayoutParams(dp(18), dp(22)));
         main.addView(topBar);
 
         // Contenido: una página visible a la vez, elegida con la barra de abajo
@@ -691,8 +715,8 @@ public class XLinkActivity extends Activity {
         deviceCard.setPadding(dp(14), dp(12), dp(14), dp(12));
         LinearLayout deviceLine = new LinearLayout(this);
         deviceLine.setGravity(Gravity.CENTER_VERTICAL);
-        drawerDot = new View(this);
-        deviceLine.addView(drawerDot, new LinearLayout.LayoutParams(dp(10), dp(10)));
+        drawerBluetooth = new BluetoothView(this);
+        deviceLine.addView(drawerBluetooth, new LinearLayout.LayoutParams(dp(16), dp(20)));
         drawerName = text("", 16, TEXT);
         drawerName.setTypeface(Typeface.DEFAULT_BOLD);
         drawerName.setPadding(dp(10), 0, 0, 0);
@@ -2175,6 +2199,7 @@ public class XLinkActivity extends Activity {
                 channelsHeader.addView(auto, autoParams);
             }
             gainRows.addView(channelsHeader);
+            gainRows.addView(limiterLedRow());
         }
         for (int ch = 0; ch < config.channelGains.length; ch++) {
             LinearLayout card = card();
@@ -2184,6 +2209,33 @@ public class XLinkActivity extends Activity {
             params.topMargin = ch > 0 ? dp(10) : 0;
             gainRows.addView(card, params);
         }
+    }
+
+    /** Un LED por canal que se prende en rojo cuando su limiter está actuando (según V;). */
+    private View limiterLedRow() {
+        limiterLeds.clear();
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 0, 0, dp(12));
+        TextView title = text("LIMITANDO", 11, MUTED);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setLetterSpacing(0.08f);
+        title.setPadding(dp(4), 0, dp(10), 0);
+        row.addView(title);
+        for (int ch = 0; ch < config.channelGains.length; ch++) {
+            LedView led = new LedView(this, "CH" + (ch + 1));
+            row.addView(led, new LinearLayout.LayoutParams(0, dp(46), 1f));
+            limiterLeds.add(led);
+        }
+        showMonitor(lastMonitor);
+        return row;
+    }
+
+    private void showMonitor(ar.mtorchio.xlinkdsp.dsp.MonitorReading reading) {
+        for (int ch = 0; ch < limiterLeds.size(); ch++) {
+            limiterLeds.get(ch).setOn(reading != null && ch < reading.limiting.length && reading.limiting[ch]);
+        }
+        topBattery.setVoltage(reading != null ? reading.voltage : Float.NaN);
     }
 
     /** channel = -1 para el master. */
@@ -2634,18 +2686,14 @@ public class XLinkActivity extends Activity {
         }
     }
 
-    private void setConnectedInfo(String name, String subtitle, String detail, int color) {
+    private void setConnectedInfo(String name, String subtitle, String detail) {
         runOnUiThread(() -> {
             topTitle.setText(name);
             topSubtitle.setText(subtitle + (demoMode ? " · demo" : ""));
             drawerName.setText(name);
             drawerDetail.setText(detail);
-            for (View dot : new View[]{topDot, drawerDot}) {
-                GradientDrawable shape = new GradientDrawable();
-                shape.setShape(GradientDrawable.OVAL);
-                shape.setColor(color);
-                dot.setBackground(shape);
-            }
+            topBluetooth.setConnected(true);
+            drawerBluetooth.setConnected(true);
         });
     }
 
@@ -2776,6 +2824,8 @@ public class XLinkActivity extends Activity {
             passwordField.setEnabled(state == State.IDLE);
 
             boolean connected = state == State.CONNECTED;
+            topBluetooth.setConnected(connected);
+            drawerBluetooth.setConnected(connected);
             connectScreen.setVisibility(connected ? View.GONE : View.VISIBLE);
             mainScreen.setVisibility(connected ? View.VISIBLE : View.GONE);
             if (!connected && drawerOpen) {
@@ -2876,7 +2926,17 @@ public class XLinkActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        handler.removeCallbacks(monitorPoll);
+        handler.post(monitorPoll);
         autoSearch();
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        handler.removeCallbacks(monitorPoll);
+        super.onPause();
     }
 
     /** Busca sola cuando está la pantalla de conexión (sin equipo) y no hay nada en curso. */
@@ -3139,6 +3199,17 @@ public class XLinkActivity extends Activity {
         public void onLog(String message) {
             log(message);
         }
+
+        @Override
+        public void onMonitor(ar.mtorchio.xlinkdsp.dsp.MonitorReading reading) {
+            // La respuesta cruda va al log cuando cambia, para confirmar el formato con el equipo.
+            if (!reading.raw.equals(lastMonitorRaw)) {
+                lastMonitorRaw = reading.raw;
+                log("Monitor V; <- " + reading.raw);
+            }
+            lastMonitor = reading;
+            showMonitor(reading);
+        }
     };
 
     private void onAuthenticated(String model, String preset) {
@@ -3147,18 +3218,21 @@ public class XLinkActivity extends Activity {
             setStatus(VIOLET, "Conectado a " + MockTransport.DEVICE_NAME,
                     "Modelo " + model + "  ·  Preset " + preset + "  ·  datos simulados");
             setConnectedInfo(MockTransport.DEVICE_NAME, "Modelo " + model + " · Preset " + preset,
-                    "Datos simulados de un PX 201", VIOLET);
+                    "Datos simulados de un PX 201");
         } else {
             String address = connectedDevice.getAddress();
             prefs.edit().putString(PREF_LAST_ADDRESS, address).apply();
             String name = connectedDevice.getName() != null ? connectedDevice.getName() : address;
             setStatus(GREEN, "Conectado a " + name, "Modelo " + model + "  ·  Preset " + preset + "  ·  " + address);
             setConnectedInfo(name, "Modelo " + model + " · Preset " + preset,
-                    "Modelo " + model + "  ·  Preset " + preset + "\n" + address, GREEN);
+                    "Modelo " + model + "  ·  Preset " + preset + "\n" + address);
         }
         groupsKey = demoMode ? "demo" : connectedDevice.getAddress();
         groups = ChannelGroups.decode(prefs.getString(PREF_GROUPS_PREFIX + groupsKey, null));
         config = null;
+        lastMonitor = null;
+        lastMonitorRaw = null;
+        showMonitor(null);
         eqSelection = Integer.MIN_VALUE;
         setState(State.CONNECTED);
         session.readConfig();

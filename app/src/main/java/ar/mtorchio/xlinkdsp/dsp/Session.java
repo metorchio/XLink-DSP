@@ -52,11 +52,16 @@ public final class Session implements Transport.Listener {
 
         default void onLog(String message) {
         }
+
+        /** Llegó la respuesta a requestMonitor(). */
+        default void onMonitor(MonitorReading reading) {
+        }
     }
 
     public static final long ACK_TIMEOUT_MS = 500;
     static final long LOGIN_TIMEOUT_MS = 8000;
     static final long READ_TIMEOUT_MS = 10000;
+    static final long MONITOR_TIMEOUT_MS = 800;
 
     private enum State { IDLE, OPENING, CLEANING, LOGGING_IN, READY, CLOSED }
 
@@ -69,12 +74,15 @@ public final class Session implements Transport.Listener {
     private final StringBuilder rx = new StringBuilder();
     private final Map<String, String> pending = new LinkedHashMap<>();
     private final Map<String, String> held = new LinkedHashMap<>();
-    // Sale ya, sin esperar a flush() ni pasar por lo pendiente (el fade del mute del master).
+    // Sale ya, sin esperar a flush() ni pasar por lo pendiente (el mute general).
     private final Map<String, String> urgent = new LinkedHashMap<>();
     private boolean writing;
     private boolean flushing;
     private boolean readRequested;
     private boolean reading;
+    private boolean monitorRequested;
+    private boolean monitoring;
+    private final StringBuilder monitorRx = new StringBuilder();
     private String awaitingAck;
     private int missedAcks;
 
@@ -91,6 +99,13 @@ public final class Session implements Transport.Listener {
         if (reading) {
             log("La configuración no llegó completa");
             reading = false;
+            pump();
+        }
+    };
+
+    private final Runnable monitorTimeout = () -> {
+        if (monitoring) {
+            monitoring = false;
             pump();
         }
     };
@@ -130,6 +145,18 @@ public final class Session implements Transport.Listener {
     /** Pide el volcado de configuración; llega por Listener.onConfig. */
     public void readConfig() {
         readRequested = true;
+        pump();
+    }
+
+    /**
+     * Pide tensión y estado de los limiters (V;), como el Monitor de xair; llega por
+     * Listener.onMonitor. Si ya hay uno pedido o esperando respuesta, no hace nada.
+     */
+    public void requestMonitor() {
+        if (state != State.READY || monitoring || monitorRequested) {
+            return;
+        }
+        monitorRequested = true;
         pump();
     }
 
@@ -235,6 +262,17 @@ public final class Session implements Transport.Listener {
         if (state != State.READY) {
             return;
         }
+        if (monitoring) {
+            monitorRx.append(chunk);
+            MonitorReading reading = MonitorReading.parse(monitorRx.toString());
+            if (reading != null) {
+                scheduler.cancel(monitorTimeout);
+                monitoring = false;
+                listener.onMonitor(reading);
+                pump();
+            }
+            return;
+        }
         if (awaitingAck != null && chunk.contains("OK")) {
             scheduler.cancel(ackTimeout);
             awaitingAck = null;
@@ -271,7 +309,7 @@ public final class Session implements Transport.Listener {
     // ---------------------------------------------------------------- Cola
 
     private void pump() {
-        if (state != State.READY || writing || awaitingAck != null || reading) {
+        if (state != State.READY || writing || awaitingAck != null || reading || monitoring) {
             return;
         }
         if (readRequested) {
@@ -280,6 +318,14 @@ public final class Session implements Transport.Listener {
             rx.setLength(0);
             scheduler.schedule(readTimeout, READ_TIMEOUT_MS);
             write(Commands.READ_CONFIG);
+            return;
+        }
+        if (monitorRequested) {
+            monitorRequested = false;
+            monitoring = true;
+            monitorRx.setLength(0);
+            scheduler.schedule(monitorTimeout, MONITOR_TIMEOUT_MS);
+            write(Commands.MONITOR);
             return;
         }
         if (!urgent.isEmpty()) {
@@ -307,8 +353,10 @@ public final class Session implements Transport.Listener {
     }
 
     private void write(String line) {
-        // No dejar la password a la vista en el log.
-        log("TX -> " + (line.startsWith("[0][") ? "[0][****]" : line));
+        // No dejar la password a la vista en el log; V; sale cada segundo y no se loguea.
+        if (!line.equals(Commands.MONITOR)) {
+            log("TX -> " + (line.startsWith("[0][") ? "[0][****]" : line));
+        }
         writing = true;
         if (!transport.write(line + "\r\n")) {
             writing = false;
@@ -326,6 +374,7 @@ public final class Session implements Transport.Listener {
     }
 
     private void cancelTimers() {
+        scheduler.cancel(monitorTimeout);
         scheduler.cancel(loginTimeout);
         scheduler.cancel(ackTimeout);
         scheduler.cancel(readTimeout);

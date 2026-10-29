@@ -8,6 +8,7 @@ package ar.mtorchio.xlinkdsp;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.view.MotionEvent;
@@ -44,6 +45,7 @@ final class CrossoverView extends View {
     private final Paint curvePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint handlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint cutPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
 
     private Config config;
@@ -66,6 +68,9 @@ final class CrossoverView extends View {
         curvePaint.setStrokeCap(Paint.Cap.ROUND);
         fillPaint.setStyle(Paint.Style.FILL);
         handlePaint.setStyle(Paint.Style.FILL);
+        cutPaint.setStyle(Paint.Style.STROKE);
+        cutPaint.setStrokeWidth(1.5f * density);
+        cutPaint.setPathEffect(new DashPathEffect(new float[]{5 * density, 4 * density}, 0));
     }
 
     void setConfig(Config config) {
@@ -164,12 +169,16 @@ final class CrossoverView extends View {
         if ("OFF".equals(slope)) {
             return;
         }
+        // El corte: una línea punteada que sube desde el eje de frecuencias hasta la
+        // curva (a -3 dB), con un punto chico donde la toca.
         float x = xFor(frequency);
         float y = yFor(-3);
+        cutPaint.setColor(color);
+        canvas.drawLine(x, bottom, x, y, cutPaint);
         handlePaint.setColor(0xFF0E1116);
-        canvas.drawCircle(x, y, 9 * density, handlePaint);
+        canvas.drawCircle(x, y, 4.5f * density, handlePaint);
         handlePaint.setColor(color);
-        canvas.drawCircle(x, y, 7 * density, handlePaint);
+        canvas.drawCircle(x, y, 3 * density, handlePaint);
     }
 
     @Override

@@ -28,7 +28,7 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.XLINK_KEYSTORE_BASE64 }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::Falta el secret XLINK_KEYSTORE_BASE64 (ver README, sección Release)"
+            echo "::error::Falta el secret XLINK_KEYSTORE_BASE64 (keystore en base64)"
             exit 1
           fi
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"

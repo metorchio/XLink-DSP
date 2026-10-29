@@ -171,6 +171,7 @@ public class XLinkActivity extends Activity {
     private View eqExpanded;
     private EqCurveView eqCurveBig;
     private TextView eqBigInfo;
+    private LinearLayout eqBigPresetChips;
     private final android.window.OnBackInvokedCallback collapseEqOnBack = this::collapseEq;
     // El gráfico chico y el agrandado editan lo mismo.
     private final EqCurveView.Listener eqCurveListener = new EqCurveView.Listener() {
@@ -763,6 +764,20 @@ public class XLinkActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
         bigParams.topMargin = dp(8);
         expanded.addView(eqCurveBig, bigParams);
+        // Los presets abajo, para arrancar la curva desde uno.
+        HorizontalScrollView bigPresetsScroll = new HorizontalScrollView(this);
+        bigPresetsScroll.setHorizontalScrollBarEnabled(false);
+        eqBigPresetChips = new LinearLayout(this);
+        bigPresetsScroll.addView(eqBigPresetChips);
+        eqBigPresetChips.addView(chip("Custom", -1, v -> applyPreset(-1)));
+        for (int i = 0; i < EqPresets.NAMES.length; i++) {
+            int preset = i;
+            eqBigPresetChips.addView(chip(EqPresets.NAMES[i], i, v -> applyPreset(preset)));
+        }
+        LinearLayout.LayoutParams bigPresetsParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        bigPresetsParams.topMargin = dp(8);
+        expanded.addView(bigPresetsScroll, bigPresetsParams);
         root.addView(expanded, new android.widget.FrameLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
 
@@ -1003,7 +1018,7 @@ public class XLinkActivity extends Activity {
                 restoreInputCustom(bands);
             }
         }
-        styleChips(eqPresetChips, activePreset());
+        stylePresetChips(activePreset());
         eqTitle.setText((isInputEq() ? "EQ DE ENTRADA" : "EQ CANAL " + (selection + 1))
                 + "  ·  " + bands.size() + " bandas" + (demoMode ? "  ·  demo" : ""));
         eqCurve.setBands(bands, isInputEq(), maxGain());
@@ -1092,6 +1107,12 @@ public class XLinkActivity extends Activity {
         eqBigInfo.setText("F" + (eqSelectedBand + 1) + "  ·  " + formatHz(band.frequency) + "  ·  "
                 + String.format(Locale.ROOT, "%+.0f dB", band.gainDb));
         eqBigInfo.setTextColor(gainColor(band.gainDb) == MUTED ? TEXT : gainColor(band.gainDb));
+    }
+
+    /** El preset activo marcado en las pills de abajo del EQ y en las del agrandado. */
+    private void stylePresetChips(int preset) {
+        styleChips(eqPresetChips, preset);
+        styleChips(eqBigPresetChips, preset);
     }
 
     private void invalidateCurves() {
@@ -1234,7 +1255,7 @@ public class XLinkActivity extends Activity {
             eqActivePreset.put(ch, -1);
             eqCustom.put(ch, snapshot(currentBands()));
         }
-        styleChips(eqPresetChips, -1);
+        stylePresetChips(-1);
         if (isInputEq()) {
             EqWidget.saveCustomIn(this, currentBands());
             prefs.edit().putInt(EqWidget.PREF_WIDGET_PRESET, -1).apply();
@@ -1272,7 +1293,7 @@ public class XLinkActivity extends Activity {
         for (int ch : eqTargets()) {
             eqActivePreset.put(ch, preset);
         }
-        styleChips(eqPresetChips, preset);
+        stylePresetChips(preset);
         if (isInputEq()) {
             prefs.edit().putInt(EqWidget.PREF_WIDGET_PRESET, preset).apply();
             EqWidget.refresh(this);

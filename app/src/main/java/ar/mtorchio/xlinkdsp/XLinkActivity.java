@@ -924,7 +924,8 @@ public class XLinkActivity extends Activity {
 
     /** Si la pill elegida quedó fuera de la fila deslizable, la trae a la vista. */
     private void scrollIntoView(View chip) {
-        if (!(chip.getParent().getParent() instanceof HorizontalScrollView)) {
+        // La fila se pudo rearmar (grupos, recarga) mientras esto esperaba al layout.
+        if (chip.getParent() == null || !(chip.getParent().getParent() instanceof HorizontalScrollView)) {
             return;
         }
         HorizontalScrollView scroll = (HorizontalScrollView) chip.getParent().getParent();

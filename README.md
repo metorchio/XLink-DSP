@@ -1,4 +1,4 @@
-# XLink DSP
+# <img src="docs/logo.svg" alt="" width="36" height="36" align="top"> XLink DSP
 
 App Android **open source** para manejar los DSP de **Expert Electronics** por Bluetooth, sin depender de la app oficial.
 

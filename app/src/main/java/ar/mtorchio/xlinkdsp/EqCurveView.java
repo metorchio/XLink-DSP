@@ -8,6 +8,7 @@ package ar.mtorchio.xlinkdsp;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.DashPathEffect;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -24,7 +25,10 @@ import java.util.List;
  * Curva de respuesta del EQ (20 Hz..20 kHz log, ±18 dB), sumando un filtro
  * peaking RBJ por banda, con los puntos de cada banda encima. Los puntos se
  * arrastran: vertical = ganancia, horizontal = frecuencia (solo EQ paramétrico;
- * en el gráfico de entrada las frecuencias son fijas).
+ * en el gráfico de entrada las frecuencias son fijas). En el paramétrico se ve
+ * además la campana de cada banda, y la elegida muestra su ancho (Q) con dos
+ * manijas que se estiran para cambiarlo. Con un "fondo" (el EQ de entrada) se
+ * dibuja ese EQ en gris y la suma de los dos punteada en ámbar: lo que suena en el canal.
  */
 final class EqCurveView extends View {
 
@@ -33,7 +37,13 @@ final class EqCurveView extends View {
 
         /** done = false mientras se arrastra, true al soltar. */
         void onBandChanged(int band, boolean done);
+
+        /** Se estiró el ancho de la banda (su Q); done = soltó el dedo. */
+        void onBandQChanged(int band, boolean done);
     }
+
+    static final float MIN_Q = 0.6f;
+    static final float MAX_Q = 9.9f;
 
     private static final float MIN_HZ = 20f;
     private static final float MAX_HZ = 20000f;
@@ -49,8 +59,19 @@ final class EqCurveView extends View {
     private final Paint curvePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint pointPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint bellPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint bellFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint widthPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint qLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path curve = new Path();
     private final Path fill = new Path();
+    private final Path bell = new Path();
+    private final Paint underlayPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint totalPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint legendPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path underlayCurve = new Path();
+    private final Path totalCurve = new Path();
+    private List<Config.Band> underlay;
 
     private List<Config.Band> bands = new ArrayList<>();
     private int highlightedBand = -1;
@@ -58,6 +79,7 @@ final class EqCurveView extends View {
     private float maxGainDb = RANGE_DB;
     private Listener listener;
     private int draggingBand = -1;
+    private boolean draggingQ;
     private boolean dragged;
     private float left, right, top, bottom;
 
@@ -76,6 +98,33 @@ final class EqCurveView extends View {
         curvePaint.setStrokeJoin(Paint.Join.ROUND);
         fillPaint.setStyle(Paint.Style.FILL);
         pointPaint.setStyle(Paint.Style.FILL);
+        bellPaint.setStyle(Paint.Style.STROKE);
+        bellPaint.setStrokeWidth(1.2f * density);
+        bellFillPaint.setStyle(Paint.Style.FILL);
+        bellFillPaint.setColor(0x1AFFFFFF);
+        widthPaint.setStrokeWidth(2 * density);
+        widthPaint.setStrokeCap(Paint.Cap.ROUND);
+        widthPaint.setColor(0xCCFFFFFF);
+        qLabelPaint.setColor(0xFFE8ECF4);
+        qLabelPaint.setTextSize(11 * density);
+        qLabelPaint.setFakeBoldText(true);
+        qLabelPaint.setTextAlign(Paint.Align.LEFT);
+        underlayPaint.setStyle(Paint.Style.STROKE);
+        underlayPaint.setStrokeWidth(2 * density);
+        underlayPaint.setColor(0xB38A93A6);
+        totalPaint.setStyle(Paint.Style.STROKE);
+        totalPaint.setStrokeWidth(2 * density);
+        totalPaint.setStrokeCap(Paint.Cap.ROUND);
+        totalPaint.setColor(0xFFFFC857);
+        totalPaint.setPathEffect(new DashPathEffect(new float[]{6 * density, 4 * density}, 0));
+        legendPaint.setTextSize(10 * density);
+        legendPaint.setFakeBoldText(true);
+    }
+
+    /** EQ de fondo (el de entrada) para ver la suma con este; null lo saca. */
+    void setUnderlay(List<Config.Band> underlay) {
+        this.underlay = underlay;
+        invalidate();
     }
 
     /** graphic = EQ de entrada (frecuencias fijas); maxGainDb = rango de ganancia editable. */
@@ -103,6 +152,13 @@ final class EqCurveView extends View {
         }
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                draggingQ = !graphic && nearQHandle(event.getX(), event.getY());
+                if (draggingQ) {
+                    draggingBand = highlightedBand;
+                    dragged = false;
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                    return true;
+                }
                 draggingBand = nearestBand(event.getX(), event.getY());
                 if (draggingBand < 0) {
                     return false;
@@ -113,7 +169,18 @@ final class EqCurveView extends View {
                 listener.onBandSelected(draggingBand);
                 return true;
             case MotionEvent.ACTION_MOVE:
-                if (draggingBand >= 0) {
+                if (draggingBand >= 0 && draggingQ) {
+                    Config.Band band = bands.get(draggingBand);
+                    // Distancia a la manija = medio ancho de banda, en octavas.
+                    double octaves = 2 * Math.abs(Math.log(hzFor(event.getX()) / band.frequency) / Math.log(2));
+                    float q = Math.round(Math.max(MIN_Q, Math.min(MAX_Q, qFor(Math.max(0.05, octaves)))) * 10) / 10f;
+                    if (q != band.q) {
+                        band.q = q;
+                        dragged = true;
+                        invalidate();
+                        listener.onBandQChanged(draggingBand, false);
+                    }
+                } else if (draggingBand >= 0) {
                     Config.Band band = bands.get(draggingBand);
                     float gain = Math.round(dbFor(event.getY()));
                     gain = Math.max(-maxGainDb, Math.min(maxGainDb, gain));
@@ -130,9 +197,14 @@ final class EqCurveView extends View {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 if (draggingBand >= 0 && dragged) {
-                    listener.onBandChanged(draggingBand, true);
+                    if (draggingQ) {
+                        listener.onBandQChanged(draggingBand, true);
+                    } else {
+                        listener.onBandChanged(draggingBand, true);
+                    }
                 }
                 draggingBand = -1;
+                draggingQ = false;
                 return true;
             default:
                 return false;
@@ -155,6 +227,46 @@ final class EqCurveView extends View {
             }
         }
         return best;
+    }
+
+    /** Ancho de banda (octavas) de un peaking con esa Q, y al revés. */
+    private static double octavesFor(float q) {
+        return 2 / Math.log(2) * asinh(1 / (2.0 * q));
+    }
+
+    private static float qFor(double octaves) {
+        return (float) (1 / (2 * Math.sinh(Math.log(2) / 2 * octaves)));
+    }
+
+    private static double asinh(double x) {
+        return Math.log(x + Math.sqrt(x * x + 1));
+    }
+
+    /** Las manijas del ancho de la banda elegida: sus bordes, a media ganancia. */
+    private float[] qHandles() {
+        if (highlightedBand < 0 || highlightedBand >= bands.size()) {
+            return null;
+        }
+        Config.Band band = bands.get(highlightedBand);
+        double half = octavesFor(band.q) / 2;
+        float lowX = xFor((float) (band.frequency / Math.pow(2, half)), left, right);
+        float highX = xFor((float) (band.frequency * Math.pow(2, half)), left, right);
+        float y = yFor(Math.max(-RANGE_DB, Math.min(RANGE_DB, band.gainDb / 2)), top, bottom);
+        return new float[]{lowX, highX, y};
+    }
+
+    private boolean nearQHandle(float x, float y) {
+        float[] handles = qHandles();
+        if (handles == null) {
+            return false;
+        }
+        // Con poca ganancia las manijas quedan pegadas al punto: gana el que esté más cerca.
+        Config.Band band = bands.get(highlightedBand);
+        double toPoint = Math.hypot(xFor(band.frequency, left, right) - x,
+                yFor(Math.max(-RANGE_DB, Math.min(RANGE_DB, band.gainDb)), top, bottom) - y);
+        double toHandle = Math.min(Math.hypot(handles[0] - x, handles[2] - y), Math.hypot(handles[1] - x, handles[2] - y));
+        float reach = 20 * getResources().getDisplayMetrics().density;
+        return toHandle < reach && toHandle < toPoint;
     }
 
     private float hzFor(float x) {
@@ -225,7 +337,16 @@ final class EqCurveView extends View {
         fill.lineTo(right, zeroY);
         fill.close();
         canvas.drawPath(fill, fillPaint);
+        if (!graphic) {
+            drawBells(canvas, zeroY, density);
+        }
         canvas.drawPath(curve, curvePaint);
+        if (underlay != null && !underlay.isEmpty()) {
+            drawUnderlay(canvas, density);
+        }
+        if (!graphic) {
+            drawQWidth(canvas, density);
+        }
 
         // Puntos de las bandas
         for (int i = 0; i < bands.size(); i++) {
@@ -242,6 +363,98 @@ final class EqCurveView extends View {
             pointPaint.setColor(highlighted ? 0xFFFFFFFF : 0xFFFF8A1F);
             canvas.drawCircle(x, y, radius, pointPaint);
         }
+    }
+
+    /** El EQ de fondo atenuado, la suma con este punteada y una leyenda arriba. */
+    private void drawUnderlay(Canvas canvas, float density) {
+        underlayCurve.reset();
+        totalCurve.reset();
+        for (int i = 0; i <= POINTS; i++) {
+            double hz = MIN_HZ * Math.pow(MAX_HZ / MIN_HZ, (double) i / POINTS);
+            double below = 0;
+            for (Config.Band band : underlay) {
+                below += peakingDb(hz, band);
+            }
+            double own = 0;
+            for (Config.Band band : bands) {
+                own += peakingDb(hz, band);
+            }
+            float x = xFor((float) hz, left, right);
+            float yBelow = yFor((float) Math.max(-RANGE_DB, Math.min(RANGE_DB, below)), top, bottom);
+            float yTotal = yFor((float) Math.max(-RANGE_DB, Math.min(RANGE_DB, below + own)), top, bottom);
+            if (i == 0) {
+                underlayCurve.moveTo(x, yBelow);
+                totalCurve.moveTo(x, yTotal);
+            } else {
+                underlayCurve.lineTo(x, yBelow);
+                totalCurve.lineTo(x, yTotal);
+            }
+        }
+        canvas.drawPath(underlayCurve, underlayPaint);
+        canvas.drawPath(totalCurve, totalPaint);
+
+        float y = top + 10 * density;
+        float x = right - 4 * density;
+        String total = "IN + canal";
+        legendPaint.setColor(0xFFFFC857);
+        x -= legendPaint.measureText(total);
+        canvas.drawText(total, x, y, legendPaint);
+        canvas.drawLine(x - 18 * density, y - 3 * density, x - 6 * density, y - 3 * density, totalPaint);
+        String in = "IN";
+        legendPaint.setColor(0xFF8A93A6);
+        x -= 30 * density + legendPaint.measureText(in);
+        canvas.drawText(in, x, y, legendPaint);
+        canvas.drawLine(x - 18 * density, y - 3 * density, x - 6 * density, y - 3 * density, underlayPaint);
+    }
+
+    /** La campana de cada banda por separado; la elegida, rellena. */
+    private void drawBells(Canvas canvas, float zeroY, float density) {
+        for (int b = 0; b < bands.size(); b++) {
+            Config.Band band = bands.get(b);
+            if (band.gainDb == 0) {
+                continue;
+            }
+            bell.reset();
+            for (int i = 0; i <= POINTS; i++) {
+                double hz = MIN_HZ * Math.pow(MAX_HZ / MIN_HZ, (double) i / POINTS);
+                float x = xFor((float) hz, left, right);
+                float y = yFor((float) Math.max(-RANGE_DB, Math.min(RANGE_DB, peakingDb(hz, band))), top, bottom);
+                if (i == 0) {
+                    bell.moveTo(x, zeroY);
+                }
+                bell.lineTo(x, y);
+            }
+            bell.lineTo(right, zeroY);
+            boolean highlighted = b == highlightedBand;
+            if (highlighted) {
+                canvas.drawPath(bell, bellFillPaint);
+            }
+            bellPaint.setColor(highlighted ? 0x99FFFFFF : 0x40FFFFFF);
+            canvas.drawPath(bell, bellPaint);
+        }
+    }
+
+    /** Ancho de la banda elegida: una barra entre sus bordes con manijas y la Q. */
+    private void drawQWidth(Canvas canvas, float density) {
+        float[] handles = qHandles();
+        if (handles == null) {
+            return;
+        }
+        Config.Band band = bands.get(highlightedBand);
+        canvas.drawLine(handles[0], handles[2], handles[1], handles[2], widthPaint);
+        for (int i = 0; i < 2; i++) {
+            pointPaint.setColor(0xFF0E1116);
+            canvas.drawCircle(handles[i], handles[2], 6 * density, pointPaint);
+            pointPaint.setColor(0xFFFFFFFF);
+            canvas.drawCircle(handles[i], handles[2], 4 * density, pointPaint);
+        }
+        // La Q va al costado de la manija derecha (a la izquierda si no entra).
+        String label = String.format(java.util.Locale.ROOT, "Q %.1f", band.q);
+        float labelX = handles[1] + 10 * density;
+        if (labelX + qLabelPaint.measureText(label) > right) {
+            labelX = handles[0] - 10 * density - qLabelPaint.measureText(label);
+        }
+        canvas.drawText(label, labelX, handles[2] + 4 * density, qLabelPaint);
     }
 
     private static float xFor(float hz, float left, float right) {

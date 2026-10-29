@@ -1,13 +1,21 @@
 name: Tests
 
+# PR contra main (y lo que entra a main): tests + build debug, lo más rápido posible.
 on:
   push:
-    branches: [main, alpha]
+    branches: [main]
   pull_request:
+    branches: [main]
+
+# Un push nuevo a la misma PR cancela la corrida vieja (ahorra minutos).
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -16,6 +24,7 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # Cachea Gradle entre corridas; las PR solo leen la caché.
       - uses: gradle/actions/setup-gradle@v4
 
       # Los tests de dsp fijan los strings exactos que recibe el DSP.

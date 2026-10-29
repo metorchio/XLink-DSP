@@ -69,6 +69,8 @@ public final class Session implements Transport.Listener {
     private final StringBuilder rx = new StringBuilder();
     private final Map<String, String> pending = new LinkedHashMap<>();
     private final Map<String, String> held = new LinkedHashMap<>();
+    // Sale ya, sin esperar a flush() ni pasar por lo pendiente (el fade del mute del master).
+    private final Map<String, String> urgent = new LinkedHashMap<>();
     private boolean writing;
     private boolean flushing;
     private boolean readRequested;
@@ -117,6 +119,7 @@ public final class Session implements Transport.Listener {
         cancelTimers();
         pending.clear();
         held.clear();
+        urgent.clear();
         transport.close();
     }
 
@@ -144,6 +147,25 @@ public final class Session implements Transport.Listener {
     public void releaseHeld() {
         pending.putAll(held);
         held.clear();
+    }
+
+    /**
+     * Manda un comando ya, adelante de lo pendiente y sin mandar lo pendiente. Si
+     * todavía no salió el anterior con la misma clave, lo pisa; un pendiente igual se
+     * descarta para que un Grabar posterior no lo vuelva atrás.
+     */
+    public void sendNow(Command command) {
+        pending.remove(command.key);
+        held.remove(command.key);
+        urgent.put(command.key, command.text);
+        pump();
+    }
+
+    /** Tira lo encolado y lo retenido que todavía no salió. */
+    public void discard() {
+        pending.clear();
+        held.clear();
+        urgent.clear();
     }
 
     /** Empieza a mandar lo encolado. */
@@ -237,6 +259,7 @@ public final class Session implements Transport.Listener {
         cancelTimers();
         pending.clear();
         held.clear();
+        urgent.clear();
         listener.onClosed(reason, wasReady);
     }
 
@@ -257,6 +280,13 @@ public final class Session implements Transport.Listener {
             rx.setLength(0);
             scheduler.schedule(readTimeout, READ_TIMEOUT_MS);
             write(Commands.READ_CONFIG);
+            return;
+        }
+        if (!urgent.isEmpty()) {
+            String key = urgent.keySet().iterator().next();
+            awaitingAck = urgent.remove(key);
+            scheduler.schedule(ackTimeout, ACK_TIMEOUT_MS);
+            write(awaitingAck);
             return;
         }
         if (!flushing) {

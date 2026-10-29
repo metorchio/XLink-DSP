@@ -231,3 +231,6 @@ Si tenés otro modelo de Expert, [abrí un issue](.github/ISSUE_TEMPLATE/nuevo-m
 - La respuesta a `V;`.
 - Si `AT+LESEND=0` hace falta.
 - Cómo se cambia de preset.
+- Probar con el equipo los comandos `[2]` del crossover (frecuencia y pendiente de HPF y LPF).
+- Qué hace el DSP si el HPF queda por encima del LPF (la app no lo deja; lo esperable es que el canal quede casi mudo).
+- Si `[2][ch][param]` acepta otro `param` además de 0..3 (por ejemplo, un segundo HPF). En la configuración solo vienen los bloques `N`/`O` (HPF) y `Q`/`R` (LPF).

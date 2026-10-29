@@ -48,7 +48,7 @@ final class CrossoverView extends View {
 
     private Config config;
     private int selected;
-    private int linked = -1;
+    private int[] linked = new int[0];
     private Listener listener;
     private boolean draggingHpf;
     private boolean dragging;
@@ -73,8 +73,8 @@ final class CrossoverView extends View {
         invalidate();
     }
 
-    /** linked = canal que se mueve junto con el elegido (par L/R), o -1. */
-    void setSelected(int channel, int linked) {
+    /** linked = canales que se mueven junto con el elegido (su grupo). */
+    void setSelected(int channel, int[] linked) {
         this.selected = channel;
         this.linked = linked;
         invalidate();
@@ -141,7 +141,7 @@ final class CrossoverView extends View {
             fillPaint.setColor((color & 0x00FFFFFF) | 0x2A000000);
             canvas.drawPath(fill, fillPaint);
         }
-        curvePaint.setColor(highlighted || ch == linked ? color : (color & 0x00FFFFFF) | 0x66000000);
+        curvePaint.setColor(highlighted || isLinked(ch) ? color : (color & 0x00FFFFFF) | 0x66000000);
         curvePaint.setStrokeWidth((highlighted ? 3f : 1.5f) * density);
         canvas.drawPath(path, curvePaint);
 
@@ -149,6 +149,15 @@ final class CrossoverView extends View {
             drawHandle(canvas, config.hpfSlope[ch], config.hpfFreq[ch], color, density);
             drawHandle(canvas, config.lpfSlope[ch], config.lpfFreq[ch], color, density);
         }
+    }
+
+    private boolean isLinked(int channel) {
+        for (int ch : linked) {
+            if (ch == channel) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void drawHandle(Canvas canvas, String slope, float frequency, int color, float density) {

@@ -86,6 +86,7 @@ public class XLinkActivity extends Activity {
     static final String PREF_PASSWORD = "password";
     static final String PREF_LAST_ADDRESS = "last_address";
     private static final String PREF_EQ_LIVE = "eq_live";
+    private static final String PREF_EQ_SHOW_INPUT = "eq_show_input";
 
     // Paleta del ícono
     private static final int BG = 0xFF0E1116;
@@ -107,14 +108,14 @@ public class XLinkActivity extends Activity {
     private static final int PAGE_CROSSOVER = 1;
     private static final int PAGE_EQ = 2;
     private static final int PAGE_GAIN = 3;
-    private static final String PREF_XO_LINK = "xo_link";
+    private static final String PREF_GROUPS_ON = "groups_on";
+    private static final String PREF_GROUPS_HELP_HIDDEN = "groups_help_hidden";
+    // + dirección Bluetooth del equipo ("demo" en el modo demo): grupos de cada DSP.
+    private static final String PREF_GROUPS_PREFIX = "channel_groups_";
     private static final String PREF_LIMITER_AUTO = "limiter_auto";
     // xair Delay: distancia en mm (rango en Commands); 343 mm = 1 ms de sonido.
     private static final int DELAY_STEP_MM = 10;
     private static final float MM_PER_MS = 343f;
-    // xair Routing (modelos de 2 entradas) y Phase: {etiqueta, valor}.
-    private static final String[] ROUTING_LABELS = {"L", "R", "L+R"};
-    private static final int[] ROUTING_VALUES = {Commands.ROUTE_L, Commands.ROUTE_R, Commands.ROUTE_LR};
 
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -162,6 +163,9 @@ public class XLinkActivity extends Activity {
     private TextView eqTitle;
     private LinearLayout eqChannelChips;
     private EqCurveView eqCurve;
+    // En el EQ de un canal: mostrar el EQ de entrada de fondo y la suma de los dos.
+    private TextView eqInputToggle;
+    private boolean eqShowInput;
     private LinearLayout eqBandsList;
     private LinearLayout eqPresetChips;
     private TextView eqBandLabel;
@@ -215,15 +219,28 @@ public class XLinkActivity extends Activity {
     private LinearLayout xoCard;
     private TextView xoEmpty;
     private LinearLayout xoChips;
-    private TextView xoLinkChip;
     private CrossoverView xoView;
     private TextView xoHpfValue;
     private TextView xoLpfValue;
     private LinearLayout xoHpfSlopes;
     private LinearLayout xoLpfSlopes;
+    private TextView xoHpfHint;
+    private TextView xoLpfHint;
     private int xoSelected;
-    private boolean xoLink;
     private boolean limiterAuto;
+    // Mute del master: baja la ganancia al mínimo con un fade y la devuelve al sacarlo.
+    private boolean masterMuted;
+    private int masterBeforeMute;
+    private android.animation.ValueAnimator masterFade;
+    // Canales vinculados del equipo conectado; solo se aplican con los grupos prendidos.
+    private ChannelGroups groups = new ChannelGroups();
+    private String groupsKey;
+    private boolean groupsOn;
+    private final List<ChainView> groupButtons = new ArrayList<>();
+    private final List<TextView> discardButtons = new ArrayList<>();
+    // Pantalla de edición de grupos abierta (se redibuja al cambiar un grupo), o null.
+    private android.app.Dialog groupsEditor;
+    private LinearLayout groupsEditorBody;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -249,7 +266,7 @@ public class XLinkActivity extends Activity {
         android.widget.FrameLayout root = new android.widget.FrameLayout(this);
         root.setBackgroundColor(BG);
         int pad = dp(16);
-        xoLink = prefs.getBoolean(PREF_XO_LINK, true);
+        groupsOn = prefs.getBoolean(PREF_GROUPS_ON, false);
         limiterAuto = prefs.getBoolean(PREF_LIMITER_AUTO, true);
 
         // ===== Pantalla de conexión: solo cuando no hay equipo conectado
@@ -393,14 +410,12 @@ public class XLinkActivity extends Activity {
 
         // ===== Página 2: Canales (routing + fase + delay de cada salida)
         channelsPage.addView(editableHeader("Canales"));
-        TextView channelsSync = text("", 12, MUTED);
-        channelsSync.setPadding(0, dp(4), 0, 0);
-        syncTexts.add(channelsSync);
-        channelsPage.addView(channelsSync);
         channelsEmpty = text("Conectate al DSP: los canales se cargan solos al entrar", 14, MUTED);
         channelsEmpty.setPadding(0, dp(12), 0, 0);
         channelsPage.addView(channelsEmpty);
-        channelsCard = card();
+        // Cada canal es su propia tarjeta: el contenedor solo agrupa y desliza.
+        channelsCard = new LinearLayout(this);
+        channelsCard.setOrientation(LinearLayout.VERTICAL);
         ScrollView channelsScroll = new ScrollView(this);
         channelRows = new LinearLayout(this);
         channelRows.setOrientation(LinearLayout.VERTICAL);
@@ -413,10 +428,6 @@ public class XLinkActivity extends Activity {
 
         // ===== Página 2: Crossover (HPF + LPF de cada salida)
         crossoverPage.addView(editableHeader("Crossover"));
-        TextView xoSync = text("", 12, MUTED);
-        xoSync.setPadding(0, dp(4), 0, 0);
-        syncTexts.add(xoSync);
-        crossoverPage.addView(xoSync);
         xoEmpty = text("El DSP no mandó el crossover", 14, MUTED);
         xoEmpty.setPadding(0, dp(12), 0, 0);
         crossoverPage.addView(xoEmpty);
@@ -433,24 +444,21 @@ public class XLinkActivity extends Activity {
         xoChips = new LinearLayout(this);
         xoChipsScroll.addView(xoChips);
         xoChipsRow.addView(xoChipsScroll, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        xoLinkChip = chip("L/R juntos", -1, v -> toggleXoLink());
-        LinearLayout.LayoutParams linkParams = (LinearLayout.LayoutParams) xoLinkChip.getLayoutParams();
-        linkParams.rightMargin = 0;
-        linkParams.leftMargin = dp(8);
-        xoChipsRow.addView(xoLinkChip, linkParams);
         xoBody.addView(xoChipsRow);
         xoView = new CrossoverView(this);
         xoView.setListener((channel, hpf, frequency, done) -> setXoFrequency(hpf, Math.round(frequency), done));
         LinearLayout.LayoutParams xoViewParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(190));
-        xoViewParams.topMargin = dp(10);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(210));
+        xoViewParams.topMargin = dp(14);
         xoBody.addView(xoView, xoViewParams);
         xoHpfValue = text("", 15, TEXT);
         xoHpfSlopes = new LinearLayout(this);
-        xoBody.addView(xoSection("PASA ALTOS · HPF", "corta los graves", xoHpfValue, xoHpfSlopes, true));
+        xoHpfHint = text("", 12, MUTED);
+        xoBody.addView(xoSection("PASA ALTOS · HPF", "corta los graves", xoHpfValue, xoHpfSlopes, xoHpfHint, true));
         xoLpfValue = text("", 15, TEXT);
         xoLpfSlopes = new LinearLayout(this);
-        xoBody.addView(xoSection("PASA BAJOS · LPF", "corta los agudos", xoLpfValue, xoLpfSlopes, false));
+        xoLpfHint = text("", 12, MUTED);
+        xoBody.addView(xoSection("PASA BAJOS · LPF", "corta los agudos", xoLpfValue, xoLpfSlopes, xoLpfHint, false));
         LinearLayout.LayoutParams xoParams = cardParams();
         xoParams.height = 0;
         xoParams.weight = 1f;
@@ -484,11 +492,39 @@ public class XLinkActivity extends Activity {
             public void onBandChanged(int band, boolean done) {
                 onBandEdited(band, done, !isInputEq());
             }
+
+            @Override
+            public void onBandQChanged(int band, boolean done) {
+                refreshAfterEdit(band);
+                if (done) {
+                    markCustom();
+                    queueEqWrite("Q", band);
+                }
+            }
         });
         LinearLayout.LayoutParams curveParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(180));
-        curveParams.topMargin = dp(10);
-        eqCard.addView(eqCurve, curveParams);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(210));
+        curveParams.topMargin = dp(12);
+        // El gráfico lleva encima, abajo a la derecha, el botón de "IN de fondo".
+        android.widget.FrameLayout curveFrame = new android.widget.FrameLayout(this);
+        curveFrame.addView(eqCurve, new android.widget.FrameLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
+        eqShowInput = prefs.getBoolean(PREF_EQ_SHOW_INPUT, false);
+        eqInputToggle = text("+ IN", 11, MUTED);
+        eqInputToggle.setTypeface(Typeface.DEFAULT_BOLD);
+        eqInputToggle.setGravity(Gravity.CENTER);
+        eqInputToggle.setPadding(dp(10), 0, dp(10), 0);
+        eqInputToggle.setOnClickListener(v -> {
+            eqShowInput = !eqShowInput;
+            prefs.edit().putBoolean(PREF_EQ_SHOW_INPUT, eqShowInput).apply();
+            refreshEqUnderlay();
+        });
+        android.widget.FrameLayout.LayoutParams toggleParams = new android.widget.FrameLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(24), Gravity.BOTTOM | Gravity.END);
+        toggleParams.bottomMargin = dp(22);
+        toggleParams.rightMargin = dp(6);
+        curveFrame.addView(eqInputToggle, toggleParams);
+        eqCard.addView(curveFrame, curveParams);
 
         // Presets: Custom (lo grabado) + EQ predefinidos
         HorizontalScrollView presetsScroll = new HorizontalScrollView(this);
@@ -511,8 +547,7 @@ public class XLinkActivity extends Activity {
         eqBandLabel = text("", 14, TEXT);
         eqBandLabel.setTypeface(Typeface.DEFAULT_BOLD);
         editorHeader.addView(eqBandLabel, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        eqSyncText = text("Arrastrá un punto o usá − / +", 12, MUTED);
-        syncTexts.add(eqSyncText);
+        eqSyncText = text("Arrastrá un punto; sus bordes cambian la Q", 12, MUTED);
         editorHeader.addView(eqSyncText);
         LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -541,14 +576,12 @@ public class XLinkActivity extends Activity {
 
         // ===== Página 4: Niveles (master + cada canal: ganancia, mute y limiter)
         gainPage.addView(editableHeader("Niveles"));
-        TextView gainSync = text("", 12, MUTED);
-        gainSync.setPadding(0, dp(4), 0, 0);
-        syncTexts.add(gainSync);
-        gainPage.addView(gainSync);
         gainEmpty = text("El DSP no mandó ganancias", 14, MUTED);
         gainEmpty.setPadding(0, dp(12), 0, 0);
         gainPage.addView(gainEmpty);
-        gainCard = card();
+        // Master y cada canal van en su propia tarjeta: el contenedor solo agrupa y desliza.
+        gainCard = new LinearLayout(this);
+        gainCard.setOrientation(LinearLayout.VERTICAL);
         ScrollView gainScroll = new ScrollView(this);
         gainRows = new LinearLayout(this);
         gainRows.setOrientation(LinearLayout.VERTICAL);
@@ -637,13 +670,24 @@ public class XLinkActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(46));
         switchParams.topMargin = dp(12);
         drawer.addView(switchDevice, switchParams);
+        TextView groupsEntry = button("Grupos de canales", TEXT, false);
+        groupsEntry.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
+                rounded(0x00000000, CARD_STROKE, 12), null));
+        groupsEntry.setOnClickListener(v -> {
+            closeDrawer();
+            openGroupsEditor();
+        });
+        LinearLayout.LayoutParams groupsEntryParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(46));
+        groupsEntryParams.topMargin = dp(8);
+        drawer.addView(groupsEntry, groupsEntryParams);
         drawerLogHolder = new LinearLayout(this);
         drawerLogHolder.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams holderParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
         holderParams.topMargin = dp(16);
         drawer.addView(drawerLogHolder, holderParams);
-        drawer.addView(text("XLink DSP · MVP", 11, MUTED));
+        drawer.addView(text("XLink DSP · " + BuildConfig.GIT_SHA, 11, MUTED));
 
         // Android 15+ (targetSdk 36) fuerza edge-to-edge: sin esto el contenido
         // se dibuja debajo de la barra de estado/notch y se ve "cortado" arriba.
@@ -718,6 +762,17 @@ public class XLinkActivity extends Activity {
         return view;
     }
 
+    /** Botón de paso (−/+) neutro: se ve como botón sin gastar los colores de acento. */
+    private TextView stepButton(String value) {
+        TextView view = text(value, 17, TEXT);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setGravity(Gravity.CENTER);
+        GradientDrawable shape = rounded(0xFF1E2330, 0xFF323949, 12);
+        view.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), shape, null));
+        view.setClickable(true);
+        return view;
+    }
+
     private TextView pageTitle(String value) {
         TextView view = text(value, 22, TEXT);
         view.setTypeface(Typeface.DEFAULT_BOLD);
@@ -737,26 +792,27 @@ public class XLinkActivity extends Activity {
         log("Config: bloques " + loaded.blocks.keySet() + ", EQ " + loaded.eqChannels.size()
                 + " canales, EQ de entrada " + loaded.inputEq.size() + " bandas");
         runOnUiThread(() -> {
+            if (masterFade != null) {
+                masterFade.cancel();
+            }
+            masterMuted = false;
             eqCustom.clear();
             eqActivePreset.clear();
             buildGainRows();
             buildChannelRows();
             buildCrossover();
-            eqChannelChips.removeAllViews();
             boolean hasInput = !loaded.inputEq.isEmpty();
-            if (hasInput) {
-                eqChannelChips.addView(chip("IN", -1, v -> selectEq(-1)));
-            }
-            for (int ch = 0; ch < loaded.eqChannels.size(); ch++) {
-                int selection = ch;
-                eqChannelChips.addView(chip("CH" + (ch + 1), ch, v -> selectEq(selection)));
-            }
             if (!hasInput && loaded.eqChannels.isEmpty()) {
+                eqChannelChips.removeAllViews();
                 eqTitle.setText("ECUALIZADOR  ·  no vino en la respuesta");
                 return;
             }
-            selectEq(hasInput ? -1 : 0);
+            // Al releer (Descartar) se queda en el EQ que estaba; si no, el de entrada.
+            boolean keep = (eqSelection == -1 && hasInput)
+                    || (eqSelection >= 0 && eqSelection < loaded.eqChannels.size());
+            buildEqChips(keep ? eqSelection : hasInput ? -1 : 0);
             renderState();
+            refreshGroupsEditor();
         });
     }
 
@@ -824,13 +880,13 @@ public class XLinkActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.addView(text(name, 13, MUTED), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        TextView minus = button("−", CYAN, false);
+        TextView minus = stepButton("−");
         minus.setOnClickListener(onMinus);
         row.addView(minus, new LinearLayout.LayoutParams(dp(48), dp(34)));
         value.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
         value.setGravity(Gravity.CENTER);
         row.addView(value, new LinearLayout.LayoutParams(dp(104), LinearLayout.LayoutParams.WRAP_CONTENT));
-        TextView plus = button("+", ORANGE, false);
+        TextView plus = stepButton("+");
         plus.setOnClickListener(onPlus);
         row.addView(plus, new LinearLayout.LayoutParams(dp(48), dp(34)));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -855,6 +911,9 @@ public class XLinkActivity extends Activity {
 
     /** selection = -1 para el EQ de entrada, 0..n-1 para el EQ de cada canal de salida. */
     private void selectEq(int selection) {
+        if (selection >= 0) {
+            selection = leader(selection);
+        }
         eqSelection = selection;
         styleChips(eqChannelChips, selection);
         List<Config.Band> bands = currentBands();
@@ -868,6 +927,7 @@ public class XLinkActivity extends Activity {
         eqTitle.setText((isInputEq() ? "EQ DE ENTRADA" : "EQ CANAL " + (selection + 1))
                 + "  ·  " + bands.size() + " bandas" + (demoMode ? "  ·  demo" : ""));
         eqCurve.setBands(bands, isInputEq(), maxGain());
+        refreshEqUnderlay();
         eqFreqRow.setVisibility(isInputEq() ? View.GONE : View.VISIBLE);
         eqQRow.setVisibility(isInputEq() ? View.GONE : View.VISIBLE);
         eqBandsList.removeAllViews();
@@ -876,6 +936,15 @@ public class XLinkActivity extends Activity {
             eqBandsList.addView(bandRow(i));
         }
         selectBand(0);
+    }
+
+    /** "+ IN": solo en el EQ de un canal y si el DSP tiene EQ de entrada. */
+    private void refreshEqUnderlay() {
+        boolean available = !isInputEq() && !config.inputEq.isEmpty();
+        eqInputToggle.setVisibility(available ? View.VISIBLE : View.GONE);
+        eqInputToggle.setTextColor(eqShowInput ? BG : MUTED);
+        eqInputToggle.setBackground(eqShowInput ? rounded(0xFFFFC857, 0xFFFFC857, 12) : rounded(0xCC0E1116, CARD_STROKE, 12));
+        eqCurve.setUnderlay(available && eqShowInput ? config.inputEq : null);
     }
 
     /**
@@ -986,7 +1055,7 @@ public class XLinkActivity extends Activity {
 
     private void stepQ(int direction) {
         Config.Band band = currentBands().get(eqSelectedBand);
-        float q = Math.round(Math.max(0.6f, Math.min(9.9f, band.q + direction * 0.1f)) * 10) / 10f;
+        float q = Math.round(Math.max(EqCurveView.MIN_Q, Math.min(EqCurveView.MAX_Q, band.q + direction * 0.1f)) * 10) / 10f;
         if (q != band.q) {
             band.q = q;
             refreshAfterEdit(eqSelectedBand);
@@ -1019,8 +1088,10 @@ public class XLinkActivity extends Activity {
 
     /** Lo editado a mano pasa a ser el Custom de este EQ. */
     private void markCustom() {
-        eqActivePreset.put(eqSelection, -1);
-        eqCustom.put(eqSelection, snapshot(currentBands()));
+        for (int ch : eqTargets()) {
+            eqActivePreset.put(ch, -1);
+            eqCustom.put(ch, snapshot(currentBands()));
+        }
         styleChips(eqPresetChips, -1);
         if (isInputEq()) {
             EqWidget.saveCustomIn(this, currentBands());
@@ -1056,7 +1127,9 @@ public class XLinkActivity extends Activity {
             }
             updateBandRow(i);
         }
-        eqActivePreset.put(eqSelection, preset);
+        for (int ch : eqTargets()) {
+            eqActivePreset.put(ch, preset);
+        }
         styleChips(eqPresetChips, preset);
         if (isInputEq()) {
             prefs.edit().putInt(EqWidget.PREF_WIDGET_PRESET, preset).apply();
@@ -1086,15 +1159,12 @@ public class XLinkActivity extends Activity {
     private void buildChannelRows() {
         channelRows.removeAllViews();
         for (int ch = 0; ch < channelCount(); ch++) {
-            if (ch > 0) {
-                View divider = new View(this);
-                divider.setBackgroundColor(CARD_STROKE);
-                LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
-                dividerParams.topMargin = dp(10);
-                channelRows.addView(divider, dividerParams);
-            }
-            channelRows.addView(channelRow(ch));
+            LinearLayout card = card();
+            card.addView(channelRow(ch));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            params.topMargin = ch > 0 ? dp(10) : 0;
+            channelRows.addView(card, params);
         }
     }
 
@@ -1105,13 +1175,13 @@ public class XLinkActivity extends Activity {
     private View channelRow(int channel) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, dp(10), 0, 0);
 
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = text("CH" + (channel + 1), 15, TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        top.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(title);
+        top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
         TextView delayValue = text("", 13, MUTED);
         delayValue.setTypeface(Typeface.MONOSPACE);
         top.addView(delayValue);
@@ -1123,39 +1193,30 @@ public class XLinkActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         controlsParams.topMargin = dp(8);
         if (channel < config.routing.length) {
-            LinearLayout routing = new LinearLayout(this);
-            for (int i = 0; i < ROUTING_LABELS.length; i++) {
-                int value = ROUTING_VALUES[i];
-                routing.addView(chip(ROUTING_LABELS[i], value, v -> {
-                    config.routing[channel] = value;
-                    styleChips(routing, value);
-                    queueWrite(Commands.routing(channel, value));
-                }));
-            }
-            styleChips(routing, config.routing[channel]);
-            controls.addView(routing);
+            RoutingView routing = new RoutingView(this);
+            routing.setRoute(config.routing[channel]);
+            routing.setListener(route -> {
+                config.routing[channel] = route;
+                queueWrite(Commands.routing(channel, route));
+            });
+            controls.addView(routing, new LinearLayout.LayoutParams(dp(80), dp(34)));
         }
         controls.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
         if (channel < config.phase.length) {
-            LinearLayout phase = new LinearLayout(this);
-            String[] labels = {"0°", "180°"};
-            for (int value = 0; value < labels.length; value++) {
-                int phaseValue = value;
-                phase.addView(chip(labels[value], value, v -> {
-                    config.phase[channel] = phaseValue;
-                    styleChips(phase, phaseValue);
-                    queueWrite(Commands.phase(channel, phaseValue == 1));
-                }));
-            }
-            styleChips(phase, config.phase[channel]);
-            controls.addView(phase);
+            PhaseView phase = new PhaseView(this);
+            phase.setInverted(config.phase[channel] == 1);
+            phase.setListener(inverted -> {
+                config.phase[channel] = inverted ? 1 : 0;
+                queueWrite(Commands.phase(channel, inverted));
+            });
+            controls.addView(phase, new LinearLayout.LayoutParams(dp(80), dp(34)));
         }
         row.addView(controls, controlsParams);
 
         if (channel < config.delays.length) {
             LinearLayout delayRow = new LinearLayout(this);
             delayRow.setGravity(Gravity.CENTER_VERTICAL);
-            TextView minus = button("−", CYAN, false);
+            TextView minus = stepButton("−");
             delayRow.addView(minus, new LinearLayout.LayoutParams(dp(40), dp(32)));
             SeekBar seekBar = new SeekBar(this);
             seekBar.setMax(Commands.DELAY_MAX_MM);
@@ -1164,7 +1225,7 @@ public class XLinkActivity extends Activity {
             seekBar.setThumbTintList(ColorStateList.valueOf(VIOLET));
             seekBar.setProgressBackgroundTintList(ColorStateList.valueOf(CARD_STROKE));
             delayRow.addView(seekBar, new LinearLayout.LayoutParams(0, dp(36), 1f));
-            TextView plus = button("+", ORANGE, false);
+            TextView plus = stepButton("+");
             delayRow.addView(plus, new LinearLayout.LayoutParams(dp(40), dp(32)));
             delayValue.setText(formatDelay(seekBar.getProgress()));
             Runnable send = () -> {
@@ -1209,17 +1270,20 @@ public class XLinkActivity extends Activity {
 
     // ---------------------------------------------------------------- Crossover
 
-    private View xoSection(String name, String hint, TextView value, LinearLayout slopes, boolean hpf) {
+    private View xoSection(String name, String hint, TextView value, LinearLayout slopes, TextView slopeHint,
+                           boolean hpf) {
         LinearLayout section = new LinearLayout(this);
         section.setOrientation(LinearLayout.VERTICAL);
-        section.setPadding(0, dp(16), 0, 0);
+        section.setPadding(0, dp(26), 0, 0);
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         titleRow.addView(label(name));
         TextView hintView = text("  " + hint, 12, MUTED);
         titleRow.addView(hintView);
         section.addView(titleRow);
-        section.addView(stepperRow("Frecuencia", value, v -> stepXoFrequency(hpf, -1), v -> stepXoFrequency(hpf, 1)));
+        View frequencyRow = stepperRow("Frecuencia", value, v -> stepXoFrequency(hpf, -1), v -> stepXoFrequency(hpf, 1));
+        ((LinearLayout.LayoutParams) frequencyRow.getLayoutParams()).topMargin = dp(12);
+        section.addView(frequencyRow);
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
         for (Slope slope : Slope.values()) {
@@ -1228,8 +1292,11 @@ public class XLinkActivity extends Activity {
         scroll.addView(slopes);
         LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        scrollParams.topMargin = dp(8);
+        scrollParams.topMargin = dp(12);
         section.addView(scroll, scrollParams);
+        slopeHint.setLineSpacing(dp(2), 1f);
+        slopeHint.setPadding(dp(2), dp(8), 0, 0);
+        section.addView(slopeHint);
         return section;
     }
 
@@ -1244,37 +1311,15 @@ public class XLinkActivity extends Activity {
         if (xoCount() == 0) {
             return;
         }
-        for (int ch = 0; ch < xoCount(); ch++) {
-            int channel = ch;
-            xoChips.addView(chip("CH" + (ch + 1), ch, v -> selectXo(channel)));
-        }
-        styleXoLink();
+        addGroupChips(xoChips, xoCount(), this::selectXo, false);
         selectXo(Math.min(xoSelected, xoCount() - 1));
     }
 
-    /** Par L/R del canal (CH1+CH2, CH3+CH4...) si "L/R juntos" está prendido; si no, -1. */
-    private int xoPartner(int channel) {
-        int partner = channel ^ 1;
-        return xoLink && partner < xoCount() ? partner : -1;
-    }
-
     private void selectXo(int channel) {
-        xoSelected = channel;
-        styleChips(xoChips, channel);
-        xoView.setSelected(channel, xoPartner(channel));
+        xoSelected = leader(channel);
+        styleChips(xoChips, xoSelected);
+        xoView.setSelected(xoSelected, linked(xoSelected));
         refreshXo();
-    }
-
-    private void toggleXoLink() {
-        xoLink = !xoLink;
-        prefs.edit().putBoolean(PREF_XO_LINK, xoLink).apply();
-        styleXoLink();
-        xoView.setSelected(xoSelected, xoPartner(xoSelected));
-    }
-
-    private void styleXoLink() {
-        xoLinkChip.setTextColor(xoLink ? BG : MUTED);
-        xoLinkChip.setBackground(xoLink ? rounded(CYAN, CYAN, 17) : rounded(0x00000000, CARD_STROKE, 17));
     }
 
     private void refreshXo() {
@@ -1285,7 +1330,30 @@ public class XLinkActivity extends Activity {
         xoLpfValue.setText(lpfOn ? formatHz(config.lpfFreq[ch]) : "—");
         styleChips(xoHpfSlopes, slopeIndex(config.hpfSlope[ch]));
         styleChips(xoLpfSlopes, slopeIndex(config.lpfSlope[ch]));
+        xoHpfHint.setText(slopeHint(Slope.fromCode(config.hpfSlope[ch]), true));
+        xoLpfHint.setText(slopeHint(Slope.fromCode(config.lpfSlope[ch]), false));
         xoView.invalidate();
+    }
+
+    /** Qué hace la pendiente elegida, en criollo. */
+    private static String slopeHint(Slope slope, boolean hpf) {
+        if (slope == null) {
+            return "";
+        }
+        if (slope == Slope.OFF) {
+            return hpf ? "Sin filtro: pasan todos los graves." : "Sin filtro: pasan todos los agudos.";
+        }
+        String db = slope.code.substring(0, slope.code.indexOf("DB"));
+        String steep = " · " + db + " dB por octava.";
+        if (slope.code.endsWith("BTW")) {
+            return "Butterworth" + steep + "\nLo más plano posible antes del corte; en el corte cae 3 dB.";
+        }
+        if (slope.code.endsWith("LKR")) {
+            return "Linkwitz-Riley" + steep + "\nEl estándar para crossovers: en el corte cae 6 dB, así el HPF de un "
+                    + "parlante y el LPF del otro suman parejo.";
+        }
+        return "Bessel" + steep + "\nEl corte más suave y el que mejor respeta los transitorios; menos preciso en la "
+                + "frecuencia de corte.";
     }
 
     private static int slopeIndex(String code) {
@@ -1294,14 +1362,13 @@ public class XLinkActivity extends Activity {
     }
 
     private void setXoFrequency(boolean hpf, int hz, boolean send) {
-        for (int ch : new int[]{xoSelected, xoPartner(xoSelected)}) {
-            if (ch < 0) {
+        for (int ch : linked(xoSelected)) {
+            if (ch >= xoCount()) {
                 continue;
             }
             (hpf ? config.hpfFreq : config.lpfFreq)[ch] = hz;
-            // El crossover siempre espera a Grabar.
             if (send) {
-                queueWrite(hpf ? Commands.hpfFrequency(ch, hz) : Commands.lpfFrequency(ch, hz), false);
+                queueWrite(hpf ? Commands.hpfFrequency(ch, hz) : Commands.lpfFrequency(ch, hz));
             }
         }
         refreshXo();
@@ -1334,12 +1401,12 @@ public class XLinkActivity extends Activity {
             return;
         }
         Runnable apply = () -> {
-            for (int ch : new int[]{xoSelected, xoPartner(xoSelected)}) {
-                if (ch < 0) {
+            for (int ch : linked(xoSelected)) {
+                if (ch >= xoCount()) {
                     continue;
                 }
                 (hpf ? config.hpfSlope : config.lpfSlope)[ch] = slope.code;
-                queueWrite(hpf ? Commands.hpfSlope(ch, slope) : Commands.lpfSlope(ch, slope), false);
+                queueWrite(hpf ? Commands.hpfSlope(ch, slope) : Commands.lpfSlope(ch, slope));
             }
             refreshXo();
         };
@@ -1356,16 +1423,573 @@ public class XLinkActivity extends Activity {
         }
     }
 
+    // ---------------------------------------------------------------- Grupos
+
+    /** Canales que recibe una edición hecha en channel: su grupo si los grupos están prendidos. */
+    private int[] linked(int channel) {
+        return groupsOn ? groups.members(channel) : new int[]{channel};
+    }
+
+    private int leader(int channel) {
+        return groupsOn ? groups.leader(channel) : channel;
+    }
+
+    /** Aplica un cambio de Niveles a todo el grupo; si hubo más de uno, redibuja las filas. */
+    private void forGainGroup(int channel, int length, java.util.function.IntConsumer action) {
+        int[] targets = linked(channel);
+        for (int ch : targets) {
+            if (ch < length) {
+                action.accept(ch);
+            }
+        }
+        if (targets.length > 1) {
+            handler.post(this::buildGainRows);
+        }
+    }
+
+    private int groupChannelCount() {
+        if (config == null) {
+            return 0;
+        }
+        return Math.max(Math.max(config.eqChannels.size(), xoCount()),
+                Math.max(config.channelGains.length, config.limThreshold.length));
+    }
+
+    private static String channelNames(int[] channels) {
+        StringBuilder names = new StringBuilder();
+        for (int ch : channels) {
+            names.append(names.length() > 0 ? " · " : "").append("CH").append(ch + 1);
+        }
+        return names.toString();
+    }
+
+    /** "· con CH2" al lado del nombre de un canal vinculado (vacío si va solo). */
+    private TextView groupTag(int channel) {
+        int[] members = linked(channel);
+        StringBuilder others = new StringBuilder();
+        for (int ch : members) {
+            if (ch != channel) {
+                others.append(others.length() > 0 ? ", " : "").append("CH").append(ch + 1);
+            }
+        }
+        TextView tag = text(others.length() > 0 ? "  · con " + others : "", 12, CYAN);
+        tag.setSingleLine(true);
+        return tag;
+    }
+
+    /**
+     * Una pill por canal suelto y una sola pill fusionada por grupo ("CH1 · CH2"); su
+     * tag es el primer canal del grupo. stored = mostrar los grupos aunque estén apagados.
+     */
+    private void addGroupChips(LinearLayout chips, int count, java.util.function.IntConsumer onSelect,
+                               boolean stored) {
+        for (int ch = 0; ch < count; ch++) {
+            int[] members = stored ? groups.members(ch) : linked(ch);
+            if (members[0] != ch) {
+                continue;
+            }
+            List<Integer> shown = new ArrayList<>();
+            for (int member : members) {
+                if (member < count) {
+                    shown.add(member);
+                }
+            }
+            int[] visible = new int[shown.size()];
+            for (int i = 0; i < visible.length; i++) {
+                visible[i] = shown.get(i);
+            }
+            int first = ch;
+            TextView chip = chip(channelNames(visible), first, v -> onSelect.accept(first));
+            makeLinkable(chip, first, stored);
+            chips.addView(chip);
+        }
+    }
+
+    private void buildEqChips(int selection) {
+        eqChannelChips.removeAllViews();
+        boolean hasInput = !config.inputEq.isEmpty();
+        if (hasInput) {
+            eqChannelChips.addView(chip("IN", -1, v -> selectEq(-1)));
+        }
+        addGroupChips(eqChannelChips, config.eqChannels.size(), this::selectEq, false);
+        boolean valid = (selection == -1 && hasInput) || (selection >= 0 && selection < config.eqChannels.size());
+        selectEq(valid ? selection : hasInput ? -1 : 0);
+    }
+
+    /**
+     * Mantener apretada una pill la levanta y sigue al dedo: soltada sobre otra pill de la
+     * misma fila, las vincula (manda la que agarraste); soltada en el lugar, abre el menú.
+     * Va a mano (no con drag and drop del sistema) para que la fila deslizable no la corte.
+     */
+    private void makeLinkable(View chip, int channel, boolean always) {
+        float[] down = new float[2];
+        boolean[] dragging = {false};
+        View[] hovered = {null};
+        chip.setOnLongClickListener(v -> {
+            if (!groupsOn && !always) {
+                android.widget.Toast.makeText(this, "Prendé los grupos (la cadena de arriba) para vincular canales",
+                        android.widget.Toast.LENGTH_SHORT).show();
+                return true;
+            }
+            dragging[0] = true;
+            v.getParent().requestDisallowInterceptTouchEvent(true);
+            v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+            v.setElevation(dp(8));
+            v.animate().scaleX(1.12f).scaleY(1.12f).setDuration(120).start();
+            return true;
+        });
+        chip.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    down[0] = event.getRawX();
+                    down[1] = event.getRawY();
+                    dragging[0] = false;
+                    return false;
+                case android.view.MotionEvent.ACTION_MOVE:
+                    if (!dragging[0]) {
+                        return false;
+                    }
+                    v.setTranslationX(event.getRawX() - down[0]);
+                    v.setTranslationY(event.getRawY() - down[1]);
+                    View target = chipAt((ViewGroup) v.getParent(), v, event.getRawX(), event.getRawY());
+                    if (target != hovered[0]) {
+                        if (hovered[0] != null) {
+                            hovered[0].animate().scaleX(1f).scaleY(1f).setDuration(100).start();
+                        }
+                        if (target != null) {
+                            target.animate().scaleX(1.1f).scaleY(1.1f).setDuration(100).start();
+                        }
+                        hovered[0] = target;
+                    }
+                    return true;
+                case android.view.MotionEvent.ACTION_UP:
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    if (!dragging[0]) {
+                        return false;
+                    }
+                    dragging[0] = false;
+                    if (hovered[0] != null) {
+                        hovered[0].animate().scaleX(1f).scaleY(1f).setDuration(100).start();
+                    }
+                    View drop = hovered[0];
+                    hovered[0] = null;
+                    v.setElevation(0);
+                    v.animate().translationX(0).translationY(0).scaleX(1f).scaleY(1f).setDuration(150).start();
+                    if (event.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+                        if (drop != null) {
+                            List<Integer> targets = new ArrayList<>();
+                            for (int ch : groups.members((int) drop.getTag())) {
+                                targets.add(ch);
+                            }
+                            confirmLink(channel, targets);
+                        } else if (Math.hypot(event.getRawX() - down[0], event.getRawY() - down[1]) < dp(24)) {
+                            showGroupMenu(channel);
+                        }
+                    }
+                    return true;
+                default:
+                    return false;
+            }
+        });
+    }
+
+    /** La pill de la fila (que no sea la arrastrada ni de su grupo) bajo el dedo, o null. */
+    private View chipAt(ViewGroup row, View dragged, float rawX, float rawY) {
+        int source = (int) dragged.getTag();
+        int[] location = new int[2];
+        for (int i = 0; i < row.getChildCount(); i++) {
+            View child = row.getChildAt(i);
+            if (child == dragged || !(child.getTag() instanceof Integer) || (int) child.getTag() < 0
+                    || groups.leader((int) child.getTag()) == groups.leader(source)) {
+                continue;
+            }
+            child.getLocationOnScreen(location);
+            if (rawX >= location[0] && rawX <= location[0] + child.getWidth()
+                    && rawY >= location[1] && rawY <= location[1] + child.getHeight()) {
+                return child;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Tocar un canal o grupo muestra directo con qué se puede vincular: una fila por
+     * grupo ("CH1 + CH2") o canal suelto. Si ya está en un grupo, "Separar…" lo desarma.
+     */
+    private void showGroupMenu(int source) {
+        int[] own = groups.members(source);
+        List<int[]> options = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        for (int ch = 0; ch < groupChannelCount(); ch++) {
+            int[] theirs = groups.members(ch);
+            if (theirs[0] != ch || groups.leader(ch) == groups.leader(source)) {
+                continue;
+            }
+            StringBuilder label = new StringBuilder();
+            for (int member : theirs) {
+                label.append(label.length() > 0 ? " + " : "").append("CH").append(member + 1);
+            }
+            options.add(theirs);
+            labels.add(label.toString());
+        }
+        boolean[] checked = new boolean[options.size()];
+        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this,
+                android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Vincular " + channelNames(own) + " con…")
+                .setNegativeButton("Cancelar", null);
+        if (options.isEmpty()) {
+            builder.setMessage("No quedan canales para vincular.");
+        } else {
+            builder.setMultiChoiceItems(labels.toArray(new String[0]), checked,
+                            (dialog, which, isChecked) -> checked[which] = isChecked)
+                    .setPositiveButton("Vincular", (dialog, which) -> {
+                        List<Integer> targets = new ArrayList<>();
+                        for (int i = 0; i < checked.length; i++) {
+                            if (checked[i]) {
+                                for (int ch : options.get(i)) {
+                                    targets.add(ch);
+                                }
+                            }
+                        }
+                        if (!targets.isEmpty()) {
+                            confirmLink(source, targets);
+                        }
+                    });
+        }
+        if (own.length > 1) {
+            builder.setNeutralButton("Separar…", (dialog, which) -> showSplitMenu(source));
+        }
+        builder.show();
+    }
+
+    /** Sacar un canal del grupo o desarmarlo entero. */
+    private void showSplitMenu(int channel) {
+        int[] members = groups.members(channel);
+        List<String> items = new ArrayList<>();
+        List<Runnable> actions = new ArrayList<>();
+        for (int ch : members) {
+            items.add("Sacar CH" + (ch + 1) + " del grupo");
+            actions.add(() -> {
+                groups.remove(ch);
+                onGroupsChanged("CH" + (ch + 1) + " ya no está vinculado");
+            });
+        }
+        items.add("Desarmar el grupo");
+        actions.add(() -> {
+            groups.dissolve(channel);
+            onGroupsChanged("Grupo " + channelNames(members) + " desarmado");
+        });
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Separar " + channelNames(members))
+                .setItems(items.toArray(new String[0]), (dialog, which) -> actions.get(which).run())
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    /** Avisa que los targets copian los ajustes de source y, si se acepta, los vincula. */
+    private void confirmLink(int source, List<Integer> targets) {
+        int[] targetArray = new int[targets.size()];
+        for (int i = 0; i < targetArray.length; i++) {
+            targetArray[i] = targets.get(i);
+        }
+        String names = channelNames(targetArray);
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("¿Vincular CH" + (source + 1) + " con " + names + "?")
+                .setMessage(names + (targets.size() == 1 ? " toma" : " toman") + " los ajustes de CH" + (source + 1)
+                        + " y desde ahora se editan juntos: crossover, EQ, ganancia, mute y limiter.\n\n"
+                        + "La entrada, la fase y el delay siguen siendo de cada canal.")
+                .setPositiveButton("Vincular", (dialog, which) -> {
+                    groups.link(source, targets);
+                    if (config != null) {
+                        for (int target : targets) {
+                            copyChannel(source, target);
+                        }
+                    }
+                    if (!groupsOn) {
+                        setGroupsOn(true);
+                    }
+                    onGroupsChanged("CH" + (source + 1) + " vinculado con " + names);
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    /** Copia a "to" todo lo que se edita en grupo (no la entrada, la fase ni el delay); encola solo lo distinto. */
+    private void copyChannel(int from, int to) {
+        if (from < xoCount() && to < xoCount()) {
+            if (config.hpfFreq[to] != config.hpfFreq[from]) {
+                config.hpfFreq[to] = config.hpfFreq[from];
+                queueWrite(Commands.hpfFrequency(to, config.hpfFreq[to]));
+            }
+            if (config.lpfFreq[to] != config.lpfFreq[from]) {
+                config.lpfFreq[to] = config.lpfFreq[from];
+                queueWrite(Commands.lpfFrequency(to, config.lpfFreq[to]));
+            }
+            Slope hpf = Slope.fromCode(config.hpfSlope[from]);
+            if (hpf != null && !config.hpfSlope[to].equals(config.hpfSlope[from])) {
+                config.hpfSlope[to] = config.hpfSlope[from];
+                queueWrite(Commands.hpfSlope(to, hpf));
+            }
+            Slope lpf = Slope.fromCode(config.lpfSlope[from]);
+            if (lpf != null && !config.lpfSlope[to].equals(config.lpfSlope[from])) {
+                config.lpfSlope[to] = config.lpfSlope[from];
+                queueWrite(Commands.lpfSlope(to, lpf));
+            }
+        }
+        if (from < config.eqChannels.size() && to < config.eqChannels.size()) {
+            List<Config.Band> source = config.eqChannels.get(from);
+            List<Config.Band> target = config.eqChannels.get(to);
+            for (int i = 0; i < Math.min(source.size(), target.size()); i++) {
+                Config.Band band = target.get(i);
+                Config.Band lead = source.get(i);
+                if (band.frequency != lead.frequency) {
+                    band.frequency = lead.frequency;
+                    queueWrite(Commands.eqChannelFrequency(to, i, band.frequency));
+                }
+                if (band.q != lead.q) {
+                    band.q = lead.q;
+                    queueWrite(Commands.eqChannelQ(to, i, band.q));
+                }
+                if (band.gainDb != lead.gainDb) {
+                    band.gainDb = lead.gainDb;
+                    queueWrite(Commands.eqChannelGain(to, i, band.gainDb));
+                }
+            }
+            eqCustom.remove(to);
+            Integer preset = eqActivePreset.get(from);
+            eqActivePreset.put(to, preset != null ? preset : -1);
+        }
+        if (from < config.channelGains.length && to < config.channelGains.length) {
+            if (config.channelGains[to] != config.channelGains[from]) {
+                config.channelGains[to] = config.channelGains[from];
+                queueWrite(Commands.channelGain(to, Math.round(config.channelGains[to])));
+            }
+            if (config.channelMutes[to] != config.channelMutes[from]) {
+                config.channelMutes[to] = config.channelMutes[from];
+                queueWrite(Commands.mute(to, config.channelMutes[to]));
+            }
+        }
+        if (from < config.limThreshold.length && to < config.limThreshold.length
+                && config.limThreshold[to] != config.limThreshold[from]) {
+            config.limThreshold[to] = config.limThreshold[from];
+            queueWrite(Commands.limiterThreshold(to, config.limThreshold[to], limiterAuto));
+        }
+        if (from < config.limAttack.length && to < config.limAttack.length
+                && config.limAttack[to] != config.limAttack[from]) {
+            config.limAttack[to] = config.limAttack[from];
+            queueWrite(Commands.limiterAttack(to, config.limAttack[to]));
+        }
+        if (from < config.limDecay.length && to < config.limDecay.length
+                && config.limDecay[to] != config.limDecay[from]) {
+            config.limDecay[to] = config.limDecay[from];
+            queueWrite(Commands.limiterDecay(to, config.limDecay[to]));
+        }
+    }
+
+    private void onGroupsChanged(String message) {
+        if (groupsKey != null) {
+            prefs.edit().putString(PREF_GROUPS_PREFIX + groupsKey, groups.encode()).apply();
+        }
+        log("Grupos: " + message);
+        refreshAfterGroups();
+    }
+
+    /** Redibuja todo lo que muestra los grupos (pills, filas y el editor). */
+    private void refreshAfterGroups() {
+        if (config != null) {
+            buildGainRows();
+            buildCrossover();
+            if (!config.inputEq.isEmpty() || !config.eqChannels.isEmpty()) {
+                buildEqChips(eqSelection);
+            }
+        }
+        refreshGroupsEditor();
+    }
+
+    private void setGroupsOn(boolean on) {
+        groupsOn = on;
+        prefs.edit().putBoolean(PREF_GROUPS_ON, on).apply();
+        for (ChainView button : groupButtons) {
+            button.setOn(on);
+        }
+        log("Grupos " + (on ? "prendidos" : "apagados"));
+    }
+
+    /** Tocar la cadena prende o apaga los grupos (quedan guardados igual). */
+    private void toggleGroups() {
+        setGroupsOn(!groupsOn);
+        refreshAfterGroups();
+        if (groupsOn && !prefs.getBoolean(PREF_GROUPS_HELP_HIDDEN, false)) {
+            showGroupsHelp();
+        }
+    }
+
+    private void showGroupsHelp() {
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(24), dp(8), dp(24), 0);
+        TextView message = text("Los canales vinculados se editan juntos: crossover, EQ, ganancia, mute y limiter.\n\n"
+                + "Arrastrá una pill sobre otra para vincularlas. La que agarrás manda.\n\n"
+                + "Tocá la cadena para prender o apagar los grupos; mantenela apretada para editarlos.", 14, TEXT);
+        message.setLineSpacing(dp(2), 1f);
+        body.addView(message);
+        LinearLayout.LayoutParams demoParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        demoParams.topMargin = dp(8);
+        body.addView(new GroupsDemoView(this), demoParams);
+        android.widget.CheckBox hide = new android.widget.CheckBox(this);
+        hide.setText("No volver a mostrar");
+        hide.setTextColor(MUTED);
+        hide.setButtonTintList(ColorStateList.valueOf(CYAN));
+        LinearLayout.LayoutParams hideParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        hideParams.topMargin = dp(12);
+        body.addView(hide, hideParams);
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Grupos de canales")
+                .setView(body)
+                .setPositiveButton("OK", (dialog, which) -> {
+                    if (hide.isChecked()) {
+                        prefs.edit().putBoolean(PREF_GROUPS_HELP_HIDDEN, true).apply();
+                    }
+                })
+                .show();
+    }
+
+    /** Pantalla de grupos: prender/apagar, las pills para vincular y la lista para separar. */
+    private void openGroupsEditor() {
+        groupsEditorBody = new LinearLayout(this);
+        groupsEditorBody.setOrientation(LinearLayout.VERTICAL);
+        groupsEditorBody.setPadding(dp(24), dp(8), dp(24), dp(8));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(groupsEditorBody);
+        groupsEditor = new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Grupos de canales")
+                .setView(scroll)
+                .setPositiveButton("Listo", null)
+                .setOnDismissListener(dialog -> {
+                    groupsEditor = null;
+                    groupsEditorBody = null;
+                })
+                .show();
+        refreshGroupsEditor();
+    }
+
+    private void refreshGroupsEditor() {
+        if (groupsEditorBody == null) {
+            return;
+        }
+        LinearLayout body = groupsEditorBody;
+        body.removeAllViews();
+
+        LinearLayout toggleRow = new LinearLayout(this);
+        toggleRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView state = text(groupsOn ? "Grupos prendidos" : "Grupos apagados: cada canal va por su lado", 14,
+                groupsOn ? TEXT : MUTED);
+        toggleRow.addView(state, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        ChainView toggle = new ChainView(this);
+        toggle.setOn(groupsOn);
+        toggle.setOnClickListener(v -> {
+            setGroupsOn(!groupsOn);
+            refreshAfterGroups();
+        });
+        toggleRow.addView(toggle, new LinearLayout.LayoutParams(dp(44), dp(34)));
+        body.addView(toggleRow);
+
+        int count = groupChannelCount();
+        if (count == 0) {
+            TextView empty = text("Conectate al DSP para armar los grupos.", 13, MUTED);
+            empty.setPadding(0, dp(12), 0, 0);
+            body.addView(empty);
+            return;
+        }
+        TextView hint = text("Arrastrá un canal sobre otro para vincularlos. El que agarrás manda.", 13, MUTED);
+        hint.setPadding(0, dp(14), 0, 0);
+        body.addView(hint);
+        body.addView(new GroupsDemoView(this));
+        HorizontalScrollView chipsScroll = new HorizontalScrollView(this);
+        chipsScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout chips = new LinearLayout(this);
+        addGroupChips(chips, count, this::showGroupMenu, true);
+        for (int i = 0; i < chips.getChildCount(); i++) {
+            TextView chip = (TextView) chips.getChildAt(i);
+            boolean grouped = groups.members((int) chip.getTag()).length > 1;
+            chip.setTextColor(grouped ? CYAN : TEXT);
+            chip.setBackground(rounded(grouped ? 0x2200E5FF : 0x00000000, grouped ? CYAN : CARD_STROKE, 17));
+        }
+        chipsScroll.addView(chips);
+        body.addView(chipsScroll);
+
+        TextView listLabel = label("GRUPOS");
+        listLabel.setPadding(0, dp(18), 0, dp(4));
+        body.addView(listLabel);
+        boolean any = false;
+        for (int ch = 0; ch < count; ch++) {
+            int[] members = groups.members(ch);
+            if (members.length < 2 || members[0] != ch) {
+                continue;
+            }
+            any = true;
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dp(6), 0, dp(6));
+            TextView name = text(channelNames(members), 15, TEXT);
+            name.setTypeface(Typeface.DEFAULT_BOLD);
+            row.addView(name, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            TextView split = stepButton("Separar");
+            split.setTextSize(13);
+            split.setPadding(dp(14), 0, dp(14), 0);
+            int first = ch;
+            split.setOnClickListener(v -> {
+                groups.dissolve(first);
+                onGroupsChanged("Grupo " + channelNames(members) + " desarmado");
+            });
+            row.addView(split, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(32)));
+            body.addView(row);
+        }
+        if (!any) {
+            body.addView(text("Todavía no hay canales vinculados.", 13, MUTED));
+        }
+    }
+
+    // ---------------------------------------------------------------- Descartar
+
+    /** Tira lo que no se grabó y vuelve a leer el DSP, que tiene lo último grabado. */
+    private void confirmDiscard() {
+        if (session == null) {
+            return;
+        }
+        int count = session.pendingCount() + session.heldCount();
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("¿Descartar " + count + (count == 1 ? " cambio?" : " cambios?"))
+                .setMessage("Lo que no grabaste se pierde y se vuelve a leer la configuración del DSP.")
+                .setPositiveButton("Descartar", (dialog, which) -> {
+                    if (session == null) {
+                        return;
+                    }
+                    session.discard();
+                    log("Cambios descartados: releyendo el DSP");
+                    config = null;
+                    renderState();
+                    setSync("", MUTED);
+                    session.readConfig();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
     // ---------------------------------------------------------------- Ganancias
 
     private void buildGainRows() {
         gainRows.removeAllViews();
         if (!Float.isNaN(config.mainGain)) {
-            gainRows.addView(label("MASTER"));
-            gainRows.addView(gainRow("Master", -1, config.mainGain, Commands.MAIN_GAIN_MIN, Commands.MAIN_GAIN_MAX));
+            LinearLayout master = card();
+            master.addView(label("MASTER"));
+            master.addView(gainRow("Master", -1, config.mainGain, Commands.MAIN_GAIN_MIN, Commands.MAIN_GAIN_MAX));
+            gainRows.addView(master);
             LinearLayout channelsHeader = new LinearLayout(this);
             channelsHeader.setGravity(Gravity.CENTER_VERTICAL);
-            channelsHeader.setPadding(0, dp(18), 0, 0);
+            channelsHeader.setPadding(dp(4), dp(20), 0, dp(10));
             channelsHeader.addView(label("CANALES"), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
             if (config.limThreshold.length > 0) {
                 TextView auto = chip(limiterAuto ? "Limiter auto" : "Limiter manual", 0, v -> {
@@ -1382,7 +2006,12 @@ public class XLinkActivity extends Activity {
             gainRows.addView(channelsHeader);
         }
         for (int ch = 0; ch < config.channelGains.length; ch++) {
-            gainRows.addView(gainRow("CH" + (ch + 1), ch, config.channelGains[ch], Commands.CHANNEL_GAIN_MIN, Commands.CHANNEL_GAIN_MAX));
+            LinearLayout card = card();
+            card.addView(gainRow("CH" + (ch + 1), ch, config.channelGains[ch], Commands.CHANNEL_GAIN_MIN, Commands.CHANNEL_GAIN_MAX));
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            params.topMargin = ch > 0 ? dp(10) : 0;
+            gainRows.addView(card, params);
         }
     }
 
@@ -1390,20 +2019,31 @@ public class XLinkActivity extends Activity {
     private View gainRow(String name, int channel, float gain, int min, int max) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(0, dp(10), 0, dp(4));
+        row.setPadding(0, channel < 0 ? dp(6) : 0, 0, 0);
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = text(name, 15, TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        top.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(title);
+        top.addView(channel >= 0 ? groupTag(channel) : new View(this),
+                new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         TextView value = text("", 15, TEXT);
         value.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
-        if (channel >= 0) {
+        TextView masterMute = null;
+        if (channel < 0) {
+            masterMute = chip("Mute", 0, null);
+            LinearLayout.LayoutParams muteParams = (LinearLayout.LayoutParams) masterMute.getLayoutParams();
+            muteParams.rightMargin = dp(12);
+            top.addView(masterMute, muteParams);
+        } else {
             TextView mute = chip("Mute", 0, null);
             mute.setOnClickListener(v -> {
-                config.channelMutes[channel] = !config.channelMutes[channel];
+                boolean muted = !config.channelMutes[channel];
+                forGainGroup(channel, config.channelMutes.length, ch -> {
+                    config.channelMutes[ch] = muted;
+                    queueWrite(Commands.mute(ch, muted));
+                });
                 styleMute(mute, value, channel);
-                queueWrite(Commands.mute(channel, config.channelMutes[channel]));
             });
             LinearLayout.LayoutParams muteParams = (LinearLayout.LayoutParams) mute.getLayoutParams();
             muteParams.rightMargin = dp(12);
@@ -1434,50 +2074,130 @@ public class XLinkActivity extends Activity {
             // Como xair: el valor sale al soltar el slider.
             @Override
             public void onStopTrackingTouch(SeekBar bar) {
-                int progress = bar.getProgress();
-                if (channel < 0) {
-                    config.mainGain = progress;
-                } else {
-                    config.channelGains[channel] = progress;
-                }
-                queueWrite(channel < 0 ? Commands.masterGain(progress) : Commands.channelGain(channel, progress));
+                sendGain(channel, bar.getProgress());
             }
         });
+        // − / + de a 1 dB a los costados del slider, como el delay en Canales.
+        LinearLayout sliderRow = new LinearLayout(this);
+        sliderRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView minus = stepButton("−");
+        minus.setOnClickListener(v -> {
+            seekBar.setProgress(Math.max(min, seekBar.getProgress() - 1));
+            sendGain(channel, seekBar.getProgress());
+        });
+        sliderRow.addView(minus, new LinearLayout.LayoutParams(dp(40), dp(32)));
+        sliderRow.addView(seekBar, new LinearLayout.LayoutParams(0, dp(36), 1f));
+        TextView plus = stepButton("+");
+        plus.setOnClickListener(v -> {
+            seekBar.setProgress(Math.min(max, seekBar.getProgress() + 1));
+            sendGain(channel, seekBar.getProgress());
+        });
+        sliderRow.addView(plus, new LinearLayout.LayoutParams(dp(40), dp(32)));
         LinearLayout.LayoutParams seekParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(36));
-        seekParams.topMargin = dp(4);
-        row.addView(seekBar, seekParams);
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        seekParams.topMargin = dp(6);
+        row.addView(sliderRow, seekParams);
+        if (masterMute != null) {
+            TextView muteChip = masterMute;
+            View[] controls = {seekBar, minus, plus};
+            // El slider queda visible (atenuado) pero no se mueve mientras está en mute.
+            seekBar.setOnTouchListener((v, event) -> masterMuted);
+            Runnable style = () -> {
+                muteChip.setTextColor(masterMuted ? BG : MUTED);
+                muteChip.setBackground(masterMuted ? rounded(RED, RED, 17) : rounded(0x00000000, CARD_STROKE, 17));
+                value.setAlpha(masterMuted ? 0.4f : 1f);
+                for (View control : controls) {
+                    if (control != seekBar) {
+                        control.setEnabled(!masterMuted);
+                    }
+                    control.setAlpha(masterMuted ? 0.4f : 1f);
+                }
+            };
+            muteChip.setOnClickListener(v -> toggleMasterMute(seekBar, style));
+            style.run();
+        }
         if (channel >= 0) {
             addLimiterRows(row, channel);
         }
         return row;
     }
 
+    /**
+     * Mute del master como un fade a mano: baja de a 1 dB hasta el mínimo y, al
+     * sacarlo, sube igual hasta donde estaba. Sale ya, aunque Live esté apagado.
+     */
+    private void toggleMasterMute(SeekBar seekBar, Runnable style) {
+        if (masterFade != null) {
+            masterFade.cancel();
+        }
+        int from = seekBar.getProgress();
+        int to;
+        if (masterMuted) {
+            to = masterBeforeMute;
+        } else {
+            masterBeforeMute = from;
+            to = Commands.MAIN_GAIN_MIN;
+        }
+        masterMuted = !masterMuted;
+        style.run();
+        log("Master: " + (masterMuted ? "mute (fade a " + to + " dB)" : "vuelve a " + to + " dB"));
+        masterFade = android.animation.ValueAnimator.ofInt(from, to);
+        masterFade.setDuration(Math.max(200, Math.abs(to - from) * 25L));
+        masterFade.setInterpolator(new android.view.animation.LinearInterpolator());
+        masterFade.addUpdateListener(animation -> {
+            int db = (int) animation.getAnimatedValue();
+            if (db != Math.round(config.mainGain)) {
+                seekBar.setProgress(db);
+                config.mainGain = db;
+                if (session != null) {
+                    session.sendNow(Commands.masterGain(db));
+                }
+            }
+        });
+        masterFade.start();
+    }
+
+    /** channel = -1 para el master; un canal arrastra a su grupo. */
+    private void sendGain(int channel, int db) {
+        if (channel < 0) {
+            config.mainGain = db;
+            queueWrite(Commands.masterGain(db));
+        } else {
+            forGainGroup(channel, config.channelGains.length, ch -> {
+                config.channelGains[ch] = db;
+                queueWrite(Commands.channelGain(ch, db));
+            });
+        }
+    }
+
     /** Limiter del canal: umbral, y attack y decay solo en manual (en auto los calcula el DSP). */
     private void addLimiterRows(LinearLayout row, int channel) {
         if (channel < config.limThreshold.length) {
             row.addView(miniSlider("Limiter", Commands.LIMIT_THRESHOLD_MIN, Commands.LIMIT_THRESHOLD_MAX,
-                    config.limThreshold[channel], "%+d dB", PINK, value -> {
-                        config.limThreshold[channel] = value;
-                        queueWrite(Commands.limiterThreshold(channel, value, limiterAuto));
-                    }));
+                    config.limThreshold[channel], "%+d dB", PINK, value ->
+                            forGainGroup(channel, config.limThreshold.length, ch -> {
+                                config.limThreshold[ch] = value;
+                                queueWrite(Commands.limiterThreshold(ch, value, limiterAuto));
+                            })));
         }
         if (limiterAuto) {
             return;
         }
         if (channel < config.limAttack.length) {
             row.addView(miniSlider("Attack", Commands.LIMIT_ATTACK_MIN, Commands.LIMIT_ATTACK_MAX,
-                    config.limAttack[channel], "%d ms", VIOLET, value -> {
-                        config.limAttack[channel] = value;
-                        queueWrite(Commands.limiterAttack(channel, value));
-                    }));
+                    config.limAttack[channel], "%d ms", VIOLET, value ->
+                            forGainGroup(channel, config.limAttack.length, ch -> {
+                                config.limAttack[ch] = value;
+                                queueWrite(Commands.limiterAttack(ch, value));
+                            })));
         }
         if (channel < config.limDecay.length) {
             row.addView(miniSlider("Decay", Commands.LIMIT_DECAY_MIN, Commands.LIMIT_DECAY_MAX,
-                    config.limDecay[channel], "%d ms", VIOLET, value -> {
-                        config.limDecay[channel] = value;
-                        queueWrite(Commands.limiterDecay(channel, value));
-                    }));
+                    config.limDecay[channel], "%d ms", VIOLET, value ->
+                            forGainGroup(channel, config.limDecay.length, ch -> {
+                                config.limDecay[ch] = value;
+                                queueWrite(Commands.limiterDecay(ch, value));
+                            })));
         }
     }
 
@@ -1532,40 +2252,60 @@ public class XLinkActivity extends Activity {
         Config.Band band = currentBands().get(bandIndex);
         if (isInputEq()) {
             queueWrite(Commands.inputEqGain(bandIndex, band.gainDb));
-        } else if (type.equals("F")) {
-            queueWrite(Commands.eqChannelFrequency(eqSelection, bandIndex, band.frequency));
-        } else if (type.equals("Q")) {
-            queueWrite(Commands.eqChannelQ(eqSelection, bandIndex, band.q));
-        } else {
-            queueWrite(Commands.eqChannelGain(eqSelection, bandIndex, band.gainDb));
+            return;
         }
+        // La banda editada se copia igual a los demás canales del grupo.
+        for (int ch : eqTargets()) {
+            if (bandIndex >= config.eqChannels.get(ch).size()) {
+                continue;
+            }
+            Config.Band target = config.eqChannels.get(ch).get(bandIndex);
+            target.frequency = band.frequency;
+            target.q = band.q;
+            target.gainDb = band.gainDb;
+            if (type.equals("F")) {
+                queueWrite(Commands.eqChannelFrequency(ch, bandIndex, band.frequency));
+            } else if (type.equals("Q")) {
+                queueWrite(Commands.eqChannelQ(ch, bandIndex, band.q));
+            } else {
+                queueWrite(Commands.eqChannelGain(ch, bandIndex, band.gainDb));
+            }
+        }
+    }
+
+    /** EQ que recibe la edición: el elegido y su grupo (el de entrada va solo). */
+    private int[] eqTargets() {
+        if (isInputEq()) {
+            return new int[]{eqSelection};
+        }
+        List<Integer> targets = new ArrayList<>();
+        for (int ch : linked(eqSelection)) {
+            if (ch < config.eqChannels.size()) {
+                targets.add(ch);
+            }
+        }
+        int[] result = new int[targets.size()];
+        for (int i = 0; i < result.length; i++) {
+            result[i] = targets.get(i);
+        }
+        return result;
     }
 
     /** Encola un comando (la clave pisa uno pendiente igual); con Live sale ya. */
     private void queueWrite(Command command) {
-        queueWrite(command, true);
-    }
-
-    /** allowLive = false: aunque Live esté prendido, el cambio espera a Grabar (crossover). */
-    private void queueWrite(Command command, boolean allowLive) {
         if (session == null) {
             return;
         }
-        boolean held = eqLive && !allowLive;
-        if (held) {
-            session.hold(command);
-        } else {
-            session.queue(command);
-        }
-        if (eqLive && allowLive) {
+        session.queue(command);
+        if (eqLive) {
             flushEq();
         } else {
             updateEqHeader();
-            setSync(held ? "Crossover: tocá Grabar para aplicarlo" : "Cambios sin grabar", ORANGE);
+            setSync("Cambios sin grabar", ORANGE);
         }
     }
 
-    /** Botón Grabar: manda lo pendiente, incluido lo retenido del crossover. */
+    /** Botón Grabar: manda lo pendiente (y lo que haya quedado retenido). */
     private void saveAll() {
         if (session != null) {
             session.releaseHeld();
@@ -1580,11 +2320,31 @@ public class XLinkActivity extends Activity {
         }
     }
 
-    /** Título de página + Live + Grabar (compartidos entre EQ y Ganancias). */
+    /**
+     * Título de página + Grupos + Live + Grabar, y abajo el estado del envío con
+     * Descartar (todo compartido entre las pestañas).
+     */
     private View editableHeader(String title) {
+        LinearLayout block = new LinearLayout(this);
+        block.setOrientation(LinearLayout.VERTICAL);
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.addView(pageTitle(title), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        block.addView(header);
+        TextView titleView = pageTitle(title);
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        header.addView(titleView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        ChainView groupsButton = new ChainView(this);
+        groupsButton.setOn(groupsOn);
+        groupsButton.setOnClickListener(v -> toggleGroups());
+        groupsButton.setOnLongClickListener(v -> {
+            openGroupsEditor();
+            return true;
+        });
+        LinearLayout.LayoutParams groupsParams = new LinearLayout.LayoutParams(dp(44), dp(34));
+        groupsParams.rightMargin = dp(8);
+        header.addView(groupsButton, groupsParams);
+        groupButtons.add(groupsButton);
         TextView live = text("", 13, TEXT);
         live.setTypeface(Typeface.DEFAULT_BOLD);
         live.setGravity(Gravity.CENTER);
@@ -1601,7 +2361,24 @@ public class XLinkActivity extends Activity {
         saveParams.leftMargin = dp(8);
         header.addView(save, saveParams);
         saveButtons.add(save);
-        return header;
+
+        LinearLayout status = new LinearLayout(this);
+        status.setGravity(Gravity.CENTER_VERTICAL);
+        status.setPadding(0, dp(4), 0, 0);
+        TextView sync = text("", 12, MUTED);
+        syncTexts.add(sync);
+        status.addView(sync, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView discard = text("Descartar", 12, TEXT);
+        discard.setTypeface(Typeface.DEFAULT_BOLD);
+        discard.setGravity(Gravity.CENTER);
+        discard.setPadding(dp(12), 0, dp(12), 0);
+        discard.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF),
+                rounded(0xFF1E2330, 0xFF323949, 14), null));
+        discard.setOnClickListener(v -> confirmDiscard());
+        status.addView(discard, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(28)));
+        discardButtons.add(discard);
+        block.addView(status);
+        return block;
     }
 
     private void toggleLive() {
@@ -1632,6 +2409,9 @@ public class XLinkActivity extends Activity {
             save.setText(saving ? "Grabando…" : count > 0 ? "Grabar (" + count + ")" : "Grabar");
             save.setEnabled(count > 0 && !saving);
             save.setAlpha(count > 0 || saving ? 1f : 0.4f);
+        }
+        for (TextView discard : discardButtons) {
+            discard.setVisibility(show && count > 0 && !saving ? View.VISIBLE : View.INVISIBLE);
         }
     }
 
@@ -2179,7 +2959,10 @@ public class XLinkActivity extends Activity {
             setConnectedInfo(name, "Modelo " + model + " · Preset " + preset,
                     "Modelo " + model + "  ·  Preset " + preset + "\n" + address, GREEN);
         }
+        groupsKey = demoMode ? "demo" : connectedDevice.getAddress();
+        groups = ChannelGroups.decode(prefs.getString(PREF_GROUPS_PREFIX + groupsKey, null));
         config = null;
+        eqSelection = Integer.MIN_VALUE;
         setState(State.CONNECTED);
         session.readConfig();
     }

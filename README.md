@@ -59,6 +59,24 @@ Abrir el proyecto en Android Studio, o:
 
 Requiere Android 15 o más (minSdk 35).
 
+## Release
+
+Las PR contra `main` corren los tests y un build debug. Al pushear un tag `vX.Y.Z`
+(`git tag v1.0.0 && git push origin v1.0.0`) el workflow Release corre los tests, arma el
+APK firmado y lo publica en un GitHub Release.
+
+La firma sale de cuatro secrets del repo (Settings → Secrets and variables → Actions):
+
+| Secret | Qué es |
+|---|---|
+| `XLINK_KEYSTORE_BASE64` | la keystore, `base64 -w0 release.jks` |
+| `XLINK_KEYSTORE_PASSWORD` | password de la keystore |
+| `XLINK_KEY_ALIAS` | alias de la clave |
+| `XLINK_KEY_PASSWORD` | password de la clave |
+
+Para crear una keystore: `keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias xlink`.
+Guardala fuera del repo: si se pierde, las actualizaciones ya no instalan encima.
+
 ## Licencia
 
 Copyright (C) 2026 Maximiliano Torchio.

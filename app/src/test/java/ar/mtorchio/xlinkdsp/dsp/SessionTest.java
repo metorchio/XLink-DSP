@@ -216,6 +216,37 @@ public class SessionTest {
     }
 
     @Test
+    public void sendNowSkipsPendingAndReplacesStaleValues() {
+        connect();
+        transport.written.clear();
+        session.queue(Commands.channelGain(0, -3));
+        session.queue(Commands.masterGain(-10));
+        session.sendNow(Commands.masterGain(-20));
+        session.sendNow(Commands.masterGain(-30));
+        clock.advance(1000);
+        // Sale el primero y el segundo pisa a los que esperaban; lo pendiente no sale.
+        assertEquals(2, transport.written.size());
+        assertEquals("[100][-1][-20]\r\n", transport.written.get(0));
+        assertEquals("[100][-1][-30]\r\n", transport.written.get(1));
+        assertEquals(1, session.pendingCount());
+    }
+
+    @Test
+    public void discardDropsQueuedAndHeld() {
+        connect();
+        transport.written.clear();
+        session.queue(Commands.channelGain(0, -3));
+        session.hold(Commands.hpfFrequency(0, 100));
+        session.discard();
+        assertEquals(0, session.pendingCount());
+        assertEquals(0, session.heldCount());
+        session.releaseHeld();
+        session.flush();
+        clock.advance(1000);
+        assertTrue(transport.written.isEmpty());
+    }
+
+    @Test
     public void missingOkMovesOnAfterTimeout() {
         connect();
         transport.replyOk = false;

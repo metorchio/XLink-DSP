@@ -166,7 +166,35 @@ public class XLinkActivity extends Activity {
     // En el EQ de un canal: mostrar el EQ de entrada de fondo y la suma de los dos.
     private TextView eqInputToggle;
     private boolean eqShowInput;
+    // EQ de entrada agrandado: pantalla completa en horizontal para armar la curva.
+    private ExpandView eqExpandButton;
+    private View eqExpanded;
+    private EqCurveView eqCurveBig;
+    private TextView eqBigInfo;
+    private final android.window.OnBackInvokedCallback collapseEqOnBack = this::collapseEq;
+    // El gráfico chico y el agrandado editan lo mismo.
+    private final EqCurveView.Listener eqCurveListener = new EqCurveView.Listener() {
+        @Override
+        public void onBandSelected(int band) {
+            selectBand(band);
+        }
+
+        @Override
+        public void onBandChanged(int band, boolean done) {
+            onBandEdited(band, done, !isInputEq());
+        }
+
+        @Override
+        public void onBandQChanged(int band, boolean done) {
+            refreshAfterEdit(band);
+            if (done) {
+                markCustom();
+                queueEqWrite("Q", band);
+            }
+        }
+    };
     private LinearLayout eqBandsList;
+    private ScrollView eqBandsScroll;
     private LinearLayout eqPresetChips;
     private TextView eqBandLabel;
     private TextView eqSyncText;
@@ -362,6 +390,7 @@ public class XLinkActivity extends Activity {
         logView.setTypeface(Typeface.MONOSPACE);
         logView.setTextIsSelectable(true);
         logScroll = new ScrollView(this);
+        logScroll.setVerticalScrollBarEnabled(false);
         logScroll.addView(logView);
         logBlock.addView(logScroll);
         setLogVisible(false);
@@ -417,6 +446,7 @@ public class XLinkActivity extends Activity {
         channelsCard = new LinearLayout(this);
         channelsCard.setOrientation(LinearLayout.VERTICAL);
         ScrollView channelsScroll = new ScrollView(this);
+        channelsScroll.setVerticalScrollBarEnabled(false);
         channelRows = new LinearLayout(this);
         channelRows.setOrientation(LinearLayout.VERTICAL);
         channelsScroll.addView(channelRows);
@@ -431,8 +461,11 @@ public class XLinkActivity extends Activity {
         xoEmpty = text("El DSP no mandó el crossover", 14, MUTED);
         xoEmpty.setPadding(0, dp(12), 0, 0);
         crossoverPage.addView(xoEmpty);
-        xoCard = card();
+        // Sin una tarjeta grande: pills sueltas arriba y el gráfico y cada filtro en su tarjeta.
+        xoCard = new LinearLayout(this);
+        xoCard.setOrientation(LinearLayout.VERTICAL);
         ScrollView xoScroll = new ScrollView(this);
+        xoScroll.setVerticalScrollBarEnabled(false);
         LinearLayout xoBody = new LinearLayout(this);
         xoBody.setOrientation(LinearLayout.VERTICAL);
         xoScroll.addView(xoBody);
@@ -447,18 +480,19 @@ public class XLinkActivity extends Activity {
         xoBody.addView(xoChipsRow);
         xoView = new CrossoverView(this);
         xoView.setListener((channel, hpf, frequency, done) -> setXoFrequency(hpf, Math.round(frequency), done));
-        LinearLayout.LayoutParams xoViewParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(210));
-        xoViewParams.topMargin = dp(14);
-        xoBody.addView(xoView, xoViewParams);
+        LinearLayout xoGraphCard = card();
+        xoGraphCard.addView(xoView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(210)));
+        xoBody.addView(xoGraphCard, cardParams());
         xoHpfValue = text("", 15, TEXT);
         xoHpfSlopes = new LinearLayout(this);
         xoHpfHint = text("", 12, MUTED);
-        xoBody.addView(xoSection("PASA ALTOS · HPF", "corta los graves", xoHpfValue, xoHpfSlopes, xoHpfHint, true));
+        xoBody.addView(xoSection("PASA ALTOS · HPF", "corta los graves", xoHpfValue, xoHpfSlopes, xoHpfHint, true),
+                cardParams());
         xoLpfValue = text("", 15, TEXT);
         xoLpfSlopes = new LinearLayout(this);
         xoLpfHint = text("", 12, MUTED);
-        xoBody.addView(xoSection("PASA BAJOS · LPF", "corta los agudos", xoLpfValue, xoLpfSlopes, xoLpfHint, false));
+        xoBody.addView(xoSection("PASA BAJOS · LPF", "corta los agudos", xoLpfValue, xoLpfSlopes, xoLpfHint, false),
+                cardParams());
         LinearLayout.LayoutParams xoParams = cardParams();
         xoParams.height = 0;
         xoParams.weight = 1f;
@@ -470,8 +504,11 @@ public class XLinkActivity extends Activity {
         eqEmpty = text("Conectate al DSP: el ecualizador se carga solo al entrar", 14, MUTED);
         eqEmpty.setPadding(0, dp(12), 0, 0);
         eqPage.addView(eqEmpty);
-        eqCard = card();
+        // Sin una tarjeta grande: título y pills sueltos, el gráfico y el editor en su tarjeta.
+        eqCard = new LinearLayout(this);
+        eqCard.setOrientation(LinearLayout.VERTICAL);
         eqTitle = label("ECUALIZADOR");
+        eqTitle.setPadding(dp(4), 0, 0, 0);
         eqCard.addView(eqTitle);
         HorizontalScrollView chipsScroll = new HorizontalScrollView(this);
         chipsScroll.setHorizontalScrollBarEnabled(false);
@@ -482,29 +519,9 @@ public class XLinkActivity extends Activity {
         chipsParams.topMargin = dp(8);
         eqCard.addView(chipsScroll, chipsParams);
         eqCurve = new EqCurveView(this);
-        eqCurve.setListener(new EqCurveView.Listener() {
-            @Override
-            public void onBandSelected(int band) {
-                selectBand(band);
-            }
-
-            @Override
-            public void onBandChanged(int band, boolean done) {
-                onBandEdited(band, done, !isInputEq());
-            }
-
-            @Override
-            public void onBandQChanged(int band, boolean done) {
-                refreshAfterEdit(band);
-                if (done) {
-                    markCustom();
-                    queueEqWrite("Q", band);
-                }
-            }
-        });
+        eqCurve.setListener(eqCurveListener);
         LinearLayout.LayoutParams curveParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(210));
-        curveParams.topMargin = dp(12);
         // El gráfico lleva encima, abajo a la derecha, el botón de "IN de fondo".
         android.widget.FrameLayout curveFrame = new android.widget.FrameLayout(this);
         curveFrame.addView(eqCurve, new android.widget.FrameLayout.LayoutParams(
@@ -524,7 +541,17 @@ public class XLinkActivity extends Activity {
         toggleParams.bottomMargin = dp(22);
         toggleParams.rightMargin = dp(6);
         curveFrame.addView(eqInputToggle, toggleParams);
-        eqCard.addView(curveFrame, curveParams);
+        // En el EQ de entrada, en el mismo lugar: agrandarlo a pantalla completa.
+        eqExpandButton = new ExpandView(this, false);
+        eqExpandButton.setOnClickListener(v -> expandEq());
+        android.widget.FrameLayout.LayoutParams expandParams = new android.widget.FrameLayout.LayoutParams(
+                dp(36), dp(26), Gravity.BOTTOM | Gravity.END);
+        expandParams.bottomMargin = dp(22);
+        expandParams.rightMargin = dp(6);
+        curveFrame.addView(eqExpandButton, expandParams);
+        LinearLayout eqGraphCard = card();
+        eqGraphCard.addView(curveFrame, curveParams);
+        eqCard.addView(eqGraphCard, cardParams());
 
         // Presets: Custom (lo grabado) + EQ predefinidos
         HorizontalScrollView presetsScroll = new HorizontalScrollView(this);
@@ -538,7 +565,7 @@ public class XLinkActivity extends Activity {
         }
         LinearLayout.LayoutParams presetsParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        presetsParams.topMargin = dp(10);
+        presetsParams.topMargin = dp(12);
         eqCard.addView(presetsScroll, presetsParams);
 
         // Editor de la banda seleccionada
@@ -549,26 +576,30 @@ public class XLinkActivity extends Activity {
         editorHeader.addView(eqBandLabel, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         eqSyncText = text("Arrastrá un punto; sus bordes cambian la Q", 12, MUTED);
         editorHeader.addView(eqSyncText);
-        LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        headerParams.topMargin = dp(12);
-        eqCard.addView(editorHeader, headerParams);
+        LinearLayout editorCard = card();
+        editorCard.addView(editorHeader);
         eqGainValue = text("", 15, TEXT);
-        eqCard.addView(stepperRow("Ganancia", eqGainValue, v -> stepGain(-1), v -> stepGain(1)));
+        editorCard.addView(stepperRow("Ganancia", eqGainValue, v -> stepGain(-1), v -> stepGain(1)));
         eqFreqValue = text("", 15, TEXT);
         eqFreqRow = stepperRow("Frecuencia", eqFreqValue, v -> stepFrequency(-1), v -> stepFrequency(1));
-        eqCard.addView(eqFreqRow);
+        editorCard.addView(eqFreqRow);
         eqQValue = text("", 15, TEXT);
         eqQRow = stepperRow("Q", eqQValue, v -> stepQ(-1), v -> stepQ(1));
-        eqCard.addView(eqQRow);
+        editorCard.addView(eqQRow);
         ScrollView bandsScroll = new ScrollView(this);
+        bandsScroll.setVerticalScrollBarEnabled(false);
+        eqBandsScroll = bandsScroll;
         eqBandsList = new LinearLayout(this);
         eqBandsList.setOrientation(LinearLayout.VERTICAL);
         bandsScroll.addView(eqBandsList);
         LinearLayout.LayoutParams bandsParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
         bandsParams.topMargin = dp(8);
-        eqCard.addView(bandsScroll, bandsParams);
+        editorCard.addView(bandsScroll, bandsParams);
+        LinearLayout.LayoutParams editorParams = cardParams();
+        editorParams.height = 0;
+        editorParams.weight = 1f;
+        eqCard.addView(editorCard, editorParams);
         LinearLayout.LayoutParams eqParams = cardParams();
         eqParams.height = 0;
         eqParams.weight = 1f;
@@ -583,6 +614,7 @@ public class XLinkActivity extends Activity {
         gainCard = new LinearLayout(this);
         gainCard.setOrientation(LinearLayout.VERTICAL);
         ScrollView gainScroll = new ScrollView(this);
+        gainScroll.setVerticalScrollBarEnabled(false);
         gainRows = new LinearLayout(this);
         gainRows.setOrientation(LinearLayout.VERTICAL);
         gainScroll.addView(gainRows);
@@ -604,7 +636,12 @@ public class XLinkActivity extends Activity {
         String[] navIcons = {"⇄", "⋈", "∿", "◢"};
         for (int i = 0; i < navItems.length; i++) {
             int page = i;
-            TextView item = text(navIcons[i] + "\n" + navLabels[i], 12, MUTED);
+            // Ícono bastante más grande que el nombre, que queda en 12 sp.
+            android.text.SpannableString label = new android.text.SpannableString(navIcons[i] + "\n" + navLabels[i]);
+            label.setSpan(new android.text.style.RelativeSizeSpan(1.9f), 0, navIcons[i].length(),
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            TextView item = text("", 12, MUTED);
+            item.setText(label);
             item.setGravity(Gravity.CENTER);
             item.setTypeface(Typeface.DEFAULT_BOLD);
             item.setLineSpacing(dp(2), 1f);
@@ -612,7 +649,7 @@ public class XLinkActivity extends Activity {
             item.setClickable(true);
             item.setOnClickListener(v -> showPage(page));
             navItems[i] = item;
-            navBar.addView(item, new LinearLayout.LayoutParams(0, dp(64), 1f));
+            navBar.addView(item, new LinearLayout.LayoutParams(0, dp(70), 1f));
         }
         main.addView(navBar);
 
@@ -689,6 +726,46 @@ public class XLinkActivity extends Activity {
         drawer.addView(drawerLogHolder, holderParams);
         drawer.addView(text("XLink DSP · " + BuildConfig.GIT_SHA, 11, MUTED));
 
+        // ===== EQ de entrada agrandado (encima de todo, oculto hasta que se agranda)
+        LinearLayout expanded = new LinearLayout(this);
+        expanded.setOrientation(LinearLayout.VERTICAL);
+        expanded.setBackgroundColor(BG);
+        expanded.setClickable(true);
+        expanded.setVisibility(View.GONE);
+        eqExpanded = expanded;
+        LinearLayout expandedTop = new LinearLayout(this);
+        expandedTop.setGravity(Gravity.CENTER_VERTICAL);
+        TextView expandedTitle = label("EQ DE ENTRADA");
+        expandedTop.addView(expandedTitle);
+        eqBigInfo = text("", 14, TEXT);
+        eqBigInfo.setTypeface(Typeface.DEFAULT_BOLD);
+        eqBigInfo.setPadding(dp(16), 0, dp(8), 0);
+        eqBigInfo.setSingleLine(true);
+        eqBigInfo.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        expandedTop.addView(eqBigInfo, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        // − / + de a 1 dB para la banda elegida, para afinar sin arrastrar.
+        TextView bigMinus = stepButton("−");
+        bigMinus.setOnClickListener(v -> stepGain(-1));
+        expandedTop.addView(bigMinus, new LinearLayout.LayoutParams(dp(48), dp(32)));
+        TextView bigPlus = stepButton("+");
+        bigPlus.setOnClickListener(v -> stepGain(1));
+        LinearLayout.LayoutParams bigPlusParams = new LinearLayout.LayoutParams(dp(48), dp(32));
+        bigPlusParams.leftMargin = dp(8);
+        bigPlusParams.rightMargin = dp(16);
+        expandedTop.addView(bigPlus, bigPlusParams);
+        ExpandView collapse = new ExpandView(this, true);
+        collapse.setOnClickListener(v -> collapseEq());
+        expandedTop.addView(collapse, new LinearLayout.LayoutParams(dp(44), dp(32)));
+        expanded.addView(expandedTop);
+        eqCurveBig = new EqCurveView(this);
+        eqCurveBig.setListener(eqCurveListener);
+        LinearLayout.LayoutParams bigParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        bigParams.topMargin = dp(8);
+        expanded.addView(eqCurveBig, bigParams);
+        root.addView(expanded, new android.widget.FrameLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
+
         // Android 15+ (targetSdk 36) fuerza edge-to-edge: sin esto el contenido
         // se dibuja debajo de la barra de estado/notch y se ve "cortado" arriba.
         // La barra de pestañas va de borde a borde, solo el contenido lleva margen.
@@ -699,6 +776,8 @@ public class XLinkActivity extends Activity {
             content.setPadding(pad + bars.left, dp(4), pad + bars.right, pad);
             navBar.setPadding(bars.left, 0, bars.right, bars.bottom);
             drawer.setPadding(dp(20) + bars.left, bars.top + dp(20), dp(20), bars.bottom + dp(16));
+            Insets safe = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            expanded.setPadding(pad + safe.left, dp(12) + safe.top, pad + safe.right, dp(8) + safe.bottom);
             return insets;
         });
 
@@ -928,6 +1007,7 @@ public class XLinkActivity extends Activity {
                 + "  ·  " + bands.size() + " bandas" + (demoMode ? "  ·  demo" : ""));
         eqCurve.setBands(bands, isInputEq(), maxGain());
         refreshEqUnderlay();
+        eqSyncText.setText(isInputEq() ? "Arrastrá un punto o usá − / +" : "Arrastrá un punto; sus bordes cambian la Q");
         eqFreqRow.setVisibility(isInputEq() ? View.GONE : View.VISIBLE);
         eqQRow.setVisibility(isInputEq() ? View.GONE : View.VISIBLE);
         eqBandsList.removeAllViews();
@@ -942,6 +1022,7 @@ public class XLinkActivity extends Activity {
     private void refreshEqUnderlay() {
         boolean available = !isInputEq() && !config.inputEq.isEmpty();
         eqInputToggle.setVisibility(available ? View.VISIBLE : View.GONE);
+        eqExpandButton.setVisibility(isInputEq() ? View.VISIBLE : View.GONE);
         eqInputToggle.setTextColor(eqShowInput ? BG : MUTED);
         eqInputToggle.setBackground(eqShowInput ? rounded(0xFFFFC857, 0xFFFFC857, 12) : rounded(0xCC0E1116, CARD_STROKE, 12));
         eqCurve.setUnderlay(available && eqShowInput ? config.inputEq : null);
@@ -978,8 +1059,24 @@ public class XLinkActivity extends Activity {
         }
         eqSelectedBand = band;
         eqCurve.setHighlightedBand(band);
+        eqCurveBig.setHighlightedBand(band);
         for (int i = 0; i < eqBandsList.getChildCount(); i++) {
             eqBandsList.getChildAt(i).setBackground(i == band ? rounded(0x14FFFFFF, 0x00000000, 10) : null);
+        }
+        // Elegida desde el gráfico puede estar fuera de la lista visible: la trae a la vista.
+        if (band < eqBandsList.getChildCount()) {
+            View row = eqBandsList.getChildAt(band);
+            eqBandsScroll.post(() -> {
+                int top = row.getTop();
+                int bottom = row.getBottom();
+                int visibleTop = eqBandsScroll.getScrollY();
+                int visibleBottom = visibleTop + eqBandsScroll.getHeight();
+                if (top < visibleTop) {
+                    eqBandsScroll.smoothScrollTo(0, top);
+                } else if (bottom > visibleBottom) {
+                    eqBandsScroll.smoothScrollTo(0, bottom - eqBandsScroll.getHeight());
+                }
+            });
         }
         refreshEditor();
     }
@@ -991,6 +1088,50 @@ public class XLinkActivity extends Activity {
         eqGainValue.setTextColor(gainColor(band.gainDb));
         eqFreqValue.setText(formatHz(band.frequency));
         eqQValue.setText(String.format(Locale.ROOT, "%.1f", band.q));
+        eqBigInfo.setText("F" + (eqSelectedBand + 1) + "  ·  " + formatHz(band.frequency) + "  ·  "
+                + String.format(Locale.ROOT, "%+.0f dB", band.gainDb));
+        eqBigInfo.setTextColor(gainColor(band.gainDb) == MUTED ? TEXT : gainColor(band.gainDb));
+    }
+
+    private void invalidateCurves() {
+        eqCurve.invalidate();
+        eqCurveBig.invalidate();
+    }
+
+    /**
+     * Agranda el EQ de entrada: gira a horizontal y lo muestra a pantalla completa,
+     * editable igual que el chico. El botón de achicar (o atrás) lo vuelve a su lugar.
+     */
+    private void expandEq() {
+        if (!isInputEq() || eqExpanded.getVisibility() == View.VISIBLE) {
+            return;
+        }
+        eqCurveBig.setBands(currentBands(), true, maxGain());
+        eqCurveBig.setHighlightedBand(eqSelectedBand);
+        refreshEditor();
+        eqExpanded.setVisibility(View.VISIBLE);
+        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        WindowInsetsController controller = getWindow().getInsetsController();
+        if (controller != null) {
+            controller.hide(WindowInsets.Type.systemBars());
+            controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        }
+        getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, collapseEqOnBack);
+    }
+
+    private void collapseEq() {
+        if (eqExpanded.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        eqExpanded.setVisibility(View.GONE);
+        getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(collapseEqOnBack);
+        WindowInsetsController controller = getWindow().getInsetsController();
+        if (controller != null) {
+            controller.show(WindowInsets.Type.systemBars());
+        }
+        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        invalidateCurves();
     }
 
     private View bandRow(int index) {
@@ -1083,7 +1224,7 @@ public class XLinkActivity extends Activity {
     private void refreshAfterEdit(int band) {
         updateBandRow(band);
         refreshEditor();
-        eqCurve.invalidate();
+        invalidateCurves();
     }
 
     /** Lo editado a mano pasa a ser el Custom de este EQ. */
@@ -1136,7 +1277,7 @@ public class XLinkActivity extends Activity {
             EqWidget.refresh(this);
         }
         refreshEditor();
-        eqCurve.invalidate();
+        invalidateCurves();
         log("EQ " + (isInputEq() ? "IN" : "CH" + (eqSelection + 1)) + ": preset "
                 + (preset < 0 ? "Custom" : EqPresets.NAMES[preset]));
     }
@@ -1272,9 +1413,7 @@ public class XLinkActivity extends Activity {
 
     private View xoSection(String name, String hint, TextView value, LinearLayout slopes, TextView slopeHint,
                            boolean hpf) {
-        LinearLayout section = new LinearLayout(this);
-        section.setOrientation(LinearLayout.VERTICAL);
-        section.setPadding(0, dp(26), 0, 0);
+        LinearLayout section = card();
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         titleRow.addView(label(name));
@@ -1866,6 +2005,7 @@ public class XLinkActivity extends Activity {
         groupsEditorBody.setOrientation(LinearLayout.VERTICAL);
         groupsEditorBody.setPadding(dp(24), dp(8), dp(24), dp(8));
         ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
         scroll.addView(groupsEditorBody);
         groupsEditor = new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Grupos de canales")

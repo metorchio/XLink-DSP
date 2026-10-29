@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- XLink DSP: dos curvas de crossover (pasa-bajos / pasa-altos) que se cruzan
-     formando una X, con halo neón, anillos de "link" en las puntas, una onda de
-     audio que pasa por detrás y el punto de corte brillando en el centro.
+     formando una X, con halo y brillo de tubo de neón, anillos de "link" en las puntas, una onda de
+     audio que se parte en graves y agudos y el punto de corte brillando en el centro.
      Zona segura: 21..87. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
@@ -10,19 +10,35 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Onda de audio de fondo, que se apaga hacia los costados -->
+    <!-- Onda de audio que el crossover parte en el cruce: graves a la izquierda
+         (onda larga, cian) y agudos a la derecha (onda corta, naranja). -->
     <path
-        android:pathData="M14,54 q5,-9 10,0 q5,9 10,0 q5,-9 10,0 q5,9 10,0 q5,-9 10,0 q5,9 10,0 q5,-9 10,0 q5,9 10,0"
+        android:pathData="M12,54 q7,14 14,0 q7,-14 14,0 q7,14 14,0"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="12" android:startY="54"
+                android:endX="54" android:endY="54">
+                <item android:offset="0" android:color="#0000E5FF" />
+                <item android:offset="0.55" android:color="#BF00E5FF" />
+                <item android:offset="1" android:color="#CCFFFFFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M54,54 q2.25,-9 4.5,0 q2.25,9 4.5,0 q2.25,-9 4.5,0 q2.25,9 4.5,0 q2.25,-9 4.5,0 q2.25,9 4.5,0 q2.25,-9 4.5,0 q2.25,9 4.5,0 q2.25,-9 4.5,0"
         android:strokeWidth="2.2"
         android:strokeLineCap="round">
         <aapt:attr name="android:strokeColor">
             <gradient
                 android:type="linear"
-                android:startX="14" android:startY="54"
-                android:endX="94" android:endY="54">
-                <item android:offset="0" android:color="#00FFFFFF" />
-                <item android:offset="0.5" android:color="#8CFFFFFF" />
-                <item android:offset="1" android:color="#00FFFFFF" />
+                android:startX="54" android:startY="54"
+                android:endX="94.5" android:endY="54">
+                <item android:offset="0" android:color="#CCFFFFFF" />
+                <item android:offset="0.45" android:color="#BFFF8A1F" />
+                <item android:offset="1" android:color="#00FF3D7F" />
             </gradient>
         </aapt:attr>
     </path>
@@ -30,13 +46,13 @@
     <!-- Halos -->
     <path
         android:pathData="M33,36 C51,36 57,72 75,72"
-        android:strokeColor="#4D00E5FF"
-        android:strokeWidth="16"
+        android:strokeColor="#6100E5FF"
+        android:strokeWidth="18"
         android:strokeLineCap="round" />
     <path
         android:pathData="M33,72 C51,72 57,36 75,36"
-        android:strokeColor="#4DFF7A1F"
-        android:strokeWidth="16"
+        android:strokeColor="#61FF7A1F"
+        android:strokeWidth="18"
         android:strokeLineCap="round" />
 
     <!-- Pasa-bajos: cian -> violeta -->
@@ -53,6 +69,12 @@
                 android:endColor="#7C4DFF" />
         </aapt:attr>
     </path>
+    <!-- Brillo de tubo de neón sobre el eje del pasa-bajos (misma curva, punta a punta) -->
+    <path
+        android:pathData="M33,36 C51,36 57,72 75,72"
+        android:strokeColor="#80FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
     <!-- Pasa-altos: naranja -> rosa (pasa por encima en el cruce) -->
     <path
         android:pathData="M33,72 C51,72 57,36 75,36"
@@ -67,6 +89,12 @@
                 android:endColor="#FF3D7F" />
         </aapt:attr>
     </path>
+    <!-- Brillo de tubo de neón sobre el eje del pasa-altos (misma curva, punta a punta) -->
+    <path
+        android:pathData="M33,72 C51,72 57,36 75,36"
+        android:strokeColor="#80FFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round" />
 
     <!-- Anillos de link -->
     <path android:strokeColor="#00E5FF" android:strokeWidth="3.5"
